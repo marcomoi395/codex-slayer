@@ -59,6 +59,43 @@ $ npm run test:cov
 
 ## Deployment
 
+## Google Gmail OAuth
+
+Set these environment variables:
+
+```env
+GOOGLE_CLIENT_ID=<OAuth web client ID>
+GOOGLE_CLIENT_SECRET=<OAuth client secret>
+GOOGLE_REDIRECT_URI=http://localhost:3000/auth/google/gmail/callback
+```
+
+Google Cloud requirements:
+
+1. Enable **Gmail API**.
+2. Configure the OAuth consent screen.
+3. Add your Google account under **Test users** while the app is in testing mode.
+4. Create a **Web application** OAuth client.
+5. Add the redirect URI exactly:
+   `http://localhost:3000/auth/google/gmail/callback`
+
+Manual test:
+
+```bash
+curl http://localhost:3000/auth/google/gmail/test
+```
+
+Open the returned `authorizationUrl`. Google redirects to `/callback`; the response returns an opaque `connectionId`.
+
+The current module keeps tokens in memory. Add encrypted persistent storage and user/session binding before production use.
+
+Interactive OAuth script:
+
+```bash
+npm run google:gmail:oauth
+```
+
+Requirements: running Nest server, configured Google env vars, `curl`, `jq`, and `python3`.
+
 When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
 
 If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
