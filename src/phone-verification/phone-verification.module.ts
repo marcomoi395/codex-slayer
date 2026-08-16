@@ -1,9 +1,6 @@
 import { Module } from '@nestjs/common';
 
-import { PhoneVerificationService } from './phone-verification.service';
-
 @Module({
-  providers: [PhoneVerificationService],
-  exports: [PhoneVerificationService],
+  exports: [],
 })
 export class PhoneVerificationModule {}

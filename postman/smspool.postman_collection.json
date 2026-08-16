@@ -1,0 +1,72 @@
+{
+  "info": {
+    "name": "SMSPool Manual Testing",
+    "description": "Manual requests for the SMSPool phone verification controller.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000"
+    },
+    {
+      "key": "orderId",
+      "value": "OLQHURVZ"
+    },
+    {
+      "key": "expiresAt",
+      "value": "1786842831"
+    }
+  ],
+  "item": [
+    {
+      "name": "Get Balance",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/smspool/balance"
+      }
+    },
+    {
+      "name": "Buy Phone Number",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "none"
+        },
+        "url": "{{baseUrl}}/smspool/phone-number"
+      }
+    },
+    {
+      "name": "Get Verification Code",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/smspool/code/{{orderId}}"
+      }
+    },
+    {
+      "name": "Refund Order",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"orderId\": \"{{orderId}}\",\n  \"expiresAt\": {{expiresAt}}\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": "{{baseUrl}}/smspool/refund"
+      }
+    }
+  ]
+}
