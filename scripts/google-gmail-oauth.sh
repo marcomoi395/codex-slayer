@@ -7,9 +7,14 @@ command -v curl >/dev/null || { echo "curl is required" >&2; exit 1; }
 command -v jq >/dev/null || { echo "jq is required" >&2; exit 1; }
 command -v python3 >/dev/null || { echo "python3 is required" >&2; exit 1; }
 
-response="$(curl -fsS "$BASE_URL/auth/google/gmail/test")"
-authorization_url="$(jq -er '.authorizationUrl' <<<"$response")"
-expected_state="$(jq -er '.state' <<<"$response")"
+response="$(curl -fsS "$BASE_URL/auth/google/gmail/authorize" -D - -o /dev/null)"
+authorization_url="$(sed -n 's/^location: //Ip' <<<"$response" | tr -d '\r')"
+expected_state="$(python3 - "$authorization_url" <<'PY'
+import sys
+from urllib.parse import parse_qs, urlparse
+print(parse_qs(urlparse(sys.argv[1]).query)["state"][0])
+PY
+)"
 
 echo "Open this URL in your browser:"
 echo "$authorization_url"
@@ -45,15 +50,8 @@ if [[ "$actual_state" != "$expected_state" ]]; then
   exit 1
 fi
 
-connection_response="$(curl -fsS -G \
+curl -fsS -G \
   --data-urlencode "code=$code" \
   --data-urlencode "state=$actual_state" \
-  "$BASE_URL/auth/google/gmail/callback")"
-
-if [[ "${GOOGLE_GMAIL_SHOW_TOKENS:-false}" == "true" ]]; then
-  jq '{accessToken, refreshToken, connectionId}' <<<"$connection_response"
-else
-  echo "$connection_response" | jq
-fi
-connection_id="$(jq -er '.connectionId' <<<"$connection_response")"
-printf '\nAdd to .env:\nGOOGLE_GMAIL_CONNECTION_ID=%s\n' "$connection_id"
+  "$BASE_URL/auth/google/gmail/callback"
+printf '\nCredential saved to credential.json\n'

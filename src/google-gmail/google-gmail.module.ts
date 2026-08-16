@@ -27,8 +27,6 @@ import { GoogleGmailService } from './google-gmail.service';
           configService.get<string>('GOOGLE_TOKEN_URL') ??
           GOOGLE_GMAIL_DEFAULTS.tokenUrl,
         scope: GOOGLE_GMAIL_DEFAULTS.scope,
-        connectionId: configService.get<string>('GOOGLE_GMAIL_CONNECTION_ID'),
-        showTokens: configService.get<string>('GOOGLE_GMAIL_SHOW_TOKENS') === 'true',
         stateTtlMs: GOOGLE_GMAIL_DEFAULTS.stateTtlMs,
       }),
     },

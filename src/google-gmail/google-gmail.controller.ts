@@ -1,4 +1,14 @@
-import { BadRequestException, Controller, Get, Query, Redirect } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  Post,
+  Query,
+  Redirect,
+} from '@nestjs/common';
+import { writeFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 
 import { GoogleGmailService } from './google-gmail.service';
 
@@ -16,36 +26,57 @@ export class GoogleGmailController {
       statusCode: 302,
     };
   }
-  @Get('test')
-  testAuthorization() {
-    return this.googleGmailService.createAuthorization();
-  }
-  @Get('verification-code')
-  getVerificationCode(@Query('connectionId') connectionId?: string) {
-    const resolvedConnectionId = connectionId ?? this.googleGmailService.getConfiguredConnectionId();
-    if (!resolvedConnectionId) {
-      throw new BadRequestException(
-        'connectionId is required or GOOGLE_GMAIL_CONNECTION_ID must be configured',
-      );
+  @Post('verification-code')
+  getVerificationCode(
+    @Body() body: { credential?: { connectionId?: string } },
+  ) {
+    const connectionId = body?.credential?.connectionId;
+    if (!connectionId) {
+      throw new BadRequestException('credential.connectionId is required');
     }
 
-    return this.googleGmailService.getLatestOpenAiVerificationCode(resolvedConnectionId);
+    return this.googleGmailService.getLatestOpenAiVerificationCode(
+      connectionId,
+    );
   }
 
   @Get('callback')
-  callback(
+  async callback(
     @Query('code') code?: string,
     @Query('state') state?: string,
     @Query('error') error?: string,
   ) {
     if (error) {
-      throw new BadRequestException(`Google OAuth authorization failed: ${error}`);
+      throw new BadRequestException(
+        `Google OAuth authorization failed: ${error}`,
+      );
     }
 
     if (!code || !state) {
-      throw new BadRequestException('Google OAuth callback requires code and state');
+      throw new BadRequestException(
+        'Google OAuth callback requires code and state',
+      );
     }
 
-    return this.googleGmailService.exchangeCode(code, state);
+    const connection = await this.googleGmailService.exchangeCode(code, state);
+    await writeFile(
+      resolve(process.cwd(), 'credential.json'),
+      JSON.stringify(
+        {
+          credential: {
+            connectionId: connection.connectionId,
+            accessToken: connection.accessToken,
+            refreshToken: connection.refreshToken,
+            expiresIn: connection.expiresIn,
+            expiresAt: connection.expiresAt,
+            scope: connection.scope,
+            tokenType: connection.tokenType,
+          },
+        },
+        null,
+        2,
+      ),
+    );
+    return { message: 'Credential saved to credential.json' };
   }
 }

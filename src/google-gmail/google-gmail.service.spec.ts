@@ -11,7 +11,6 @@ const config: GoogleGmailConfig = {
   tokenUrl: 'https://oauth2.googleapis.com/token',
   scope: 'https://www.googleapis.com/auth/gmail.readonly',
   stateTtlMs: 600_000,
-  showTokens: false,
 };
 
 describe('GoogleGmailService', () => {
@@ -45,14 +44,21 @@ describe('GoogleGmailService', () => {
     );
     const service = new GoogleGmailService(config);
     const { state } = service.createAuthorization();
-
     const connection = await service.exchangeCode('code', state);
 
-    expect(connection).toMatchObject({ scope: config.scope });
-    expect(connection.connectionId).toBeTruthy();
+    expect(connection).toMatchObject({
+      connectionId: expect.any(String),
+      accessToken: 'access-token',
+      refreshToken: 'refresh-token',
+      expiresIn: 3600,
+      scope: config.scope,
+      tokenType: 'Bearer',
+    });
+    expect(connection.expiresAt).toEqual(expect.any(Number));
     expect(service.getTokens(connection.connectionId)).toMatchObject({
       accessToken: 'access-token',
       refreshToken: 'refresh-token',
+      expiresIn: 3600,
       scope: config.scope,
       tokenType: 'Bearer',
     });
@@ -72,35 +78,22 @@ describe('GoogleGmailService', () => {
       'Invalid Google OAuth token response',
     );
   });
-  it('returns Gmail tokens only when token display is enabled', async () => {
-    jest.spyOn(global, 'fetch').mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          access_token: 'access-token',
-          refresh_token: 'refresh-token',
-        }),
-        { status: 200 },
-      ),
-    );
-    const service = new GoogleGmailService({ ...config, showTokens: true });
-    const { state } = service.createAuthorization();
-
-    await expect(service.exchangeCode('code', state)).resolves.toMatchObject({
-      accessToken: 'access-token',
-      refreshToken: 'refresh-token',
-    });
-  });
   it('returns the verification code from the latest OpenAI email', async () => {
     jest.spyOn(global, 'fetch').mockImplementation(async (input) => {
       const url = String(input);
       if (url === config.tokenUrl) {
-        return new Response(JSON.stringify({ access_token: 'access-token' }), { status: 200 });
+        return new Response(JSON.stringify({ access_token: 'access-token' }), {
+          status: 200,
+        });
       }
 
       if (url.includes('/messages?')) {
-        return new Response(JSON.stringify({ messages: [{ id: 'latest-message' }] }), {
-          status: 200,
-        });
+        return new Response(
+          JSON.stringify({ messages: [{ id: 'latest-message' }] }),
+          {
+            status: 200,
+          },
+        );
       }
 
       return new Response(
@@ -121,7 +114,9 @@ describe('GoogleGmailService', () => {
     const { state } = service.createAuthorization();
     const { connectionId } = await service.exchangeCode('code', state);
 
-    await expect(service.getLatestOpenAiVerificationCode(connectionId)).resolves.toBe('602464');
+    await expect(
+      service.getLatestOpenAiVerificationCode(connectionId),
+    ).resolves.toBe('602464');
     expect(global.fetch).toHaveBeenNthCalledWith(
       2,
       expect.stringContaining(
@@ -136,13 +131,18 @@ describe('GoogleGmailService', () => {
     jest.spyOn(global, 'fetch').mockImplementation(async (input) => {
       const url = String(input);
       if (url === config.tokenUrl) {
-        return new Response(JSON.stringify({ access_token: 'access-token' }), { status: 200 });
+        return new Response(JSON.stringify({ access_token: 'access-token' }), {
+          status: 200,
+        });
       }
 
       if (url.includes('/messages?')) {
-        return new Response(JSON.stringify({ messages: [{ id: 'latest-message' }] }), {
-          status: 200,
-        });
+        return new Response(
+          JSON.stringify({ messages: [{ id: 'latest-message' }] }),
+          {
+            status: 200,
+          },
+        );
       }
 
       return new Response(
@@ -162,19 +162,26 @@ describe('GoogleGmailService', () => {
     const { state } = service.createAuthorization();
     const { connectionId } = await service.exchangeCode('code', state);
 
-    await expect(service.getLatestOpenAiVerificationCode(connectionId)).resolves.toBe('654321');
+    await expect(
+      service.getLatestOpenAiVerificationCode(connectionId),
+    ).resolves.toBe('654321');
   });
   it('extracts the code from the OpenAI HTML verification paragraph', async () => {
     jest.spyOn(global, 'fetch').mockImplementation(async (input) => {
       const url = String(input);
       if (url === config.tokenUrl) {
-        return new Response(JSON.stringify({ access_token: 'access-token' }), { status: 200 });
+        return new Response(JSON.stringify({ access_token: 'access-token' }), {
+          status: 200,
+        });
       }
 
       if (url.includes('/messages?')) {
-        return new Response(JSON.stringify({ messages: [{ id: 'html-message' }] }), {
-          status: 200,
-        });
+        return new Response(
+          JSON.stringify({ messages: [{ id: 'html-message' }] }),
+          {
+            status: 200,
+          },
+        );
       }
 
       return new Response(
@@ -194,18 +201,24 @@ describe('GoogleGmailService', () => {
     const { state } = service.createAuthorization();
     const { connectionId } = await service.exchangeCode('code', state);
 
-    await expect(service.getLatestOpenAiVerificationCode(connectionId)).resolves.toBe('954097');
+    await expect(
+      service.getLatestOpenAiVerificationCode(connectionId),
+    ).resolves.toBe('954097');
   });
   it('checks multiple matching emails until it finds a verification code', async () => {
     jest.spyOn(global, 'fetch').mockImplementation(async (input) => {
       const url = String(input);
       if (url === config.tokenUrl) {
-        return new Response(JSON.stringify({ access_token: 'access-token' }), { status: 200 });
+        return new Response(JSON.stringify({ access_token: 'access-token' }), {
+          status: 200,
+        });
       }
 
       if (url.includes('/messages?')) {
         return new Response(
-          JSON.stringify({ messages: [{ id: 'newest-email' }, { id: 'verification-email' }] }),
+          JSON.stringify({
+            messages: [{ id: 'newest-email' }, { id: 'verification-email' }],
+          }),
           { status: 200 },
         );
       }
@@ -225,8 +238,17 @@ describe('GoogleGmailService', () => {
       return new Response(
         JSON.stringify({
           payload: {
-            headers: [{ name: 'Subject', value: 'Your temporary ChatGPT verification code' }],
-            body: { data: Buffer.from('Your verification code is 765432').toString('base64url') },
+            headers: [
+              {
+                name: 'Subject',
+                value: 'Your temporary ChatGPT verification code',
+              },
+            ],
+            body: {
+              data: Buffer.from('Your verification code is 765432').toString(
+                'base64url',
+              ),
+            },
           },
         }),
         { status: 200 },
@@ -236,14 +258,17 @@ describe('GoogleGmailService', () => {
     const { state } = service.createAuthorization();
     const { connectionId } = await service.exchangeCode('code', state);
 
-    await expect(service.getLatestOpenAiVerificationCode(connectionId)).resolves.toBe('765432');
+    await expect(
+      service.getLatestOpenAiVerificationCode(connectionId),
+    ).resolves.toBe('765432');
   });
-
 
   it('throws when no OpenAI verification email exists', async () => {
     jest.spyOn(global, 'fetch').mockImplementation(async (input) => {
       if (String(input) === config.tokenUrl) {
-        return new Response(JSON.stringify({ access_token: 'access-token' }), { status: 200 });
+        return new Response(JSON.stringify({ access_token: 'access-token' }), {
+          status: 200,
+        });
       }
 
       return new Response(JSON.stringify({ messages: [] }), { status: 200 });

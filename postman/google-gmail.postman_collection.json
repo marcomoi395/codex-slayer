@@ -1,0 +1,114 @@
+{
+  "info": {
+    "_postman_id": "9f6c4d1d-5f9a-4b7f-9ad2-7c6a6bb0f31d",
+    "name": "Google Gmail OAuth",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000"
+    },
+    {
+      "key": "code",
+      "value": ""
+    },
+    {
+      "key": "state",
+      "value": ""
+    },
+    {
+      "key": "connectionId",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Authorize",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/auth/google/gmail/authorize",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "auth",
+            "google",
+            "gmail",
+            "authorize"
+          ]
+        },
+        "description": "Returns HTTP 302 to Google's OAuth authorization URL. Copy code and state from the callback URL."
+      },
+      "response": []
+    },
+    {
+      "name": "2. Callback",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/auth/google/gmail/callback?code={{code}}&state={{state}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "auth",
+            "google",
+            "gmail",
+            "callback"
+          ],
+          "query": [
+            {
+              "key": "code",
+              "value": "{{code}}"
+            },
+            {
+              "key": "state",
+              "value": "{{state}}"
+            }
+          ]
+        },
+        "description": "Exchanges Google's authorization code, stores tokens in RAM, and writes credential.json."
+      },
+      "response": []
+    },
+    {
+      "name": "3. Get Verification Code",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"credential\": {\n    \"connectionId\": \"{{connectionId}}\"\n  }\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/auth/google/gmail/verification-code",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "auth",
+            "google",
+            "gmail",
+            "verification-code"
+          ]
+        },
+        "description": "Reads the latest OpenAI verification email using the in-memory Gmail connection."
+      },
+      "response": []
+    }
+  ]
+}

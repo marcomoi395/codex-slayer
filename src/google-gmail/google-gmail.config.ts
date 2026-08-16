@@ -6,6 +6,4 @@ export interface GoogleGmailConfig {
   tokenUrl: string;
   scope: string;
   stateTtlMs: number;
-  connectionId?: string;
-  showTokens: boolean;
 }

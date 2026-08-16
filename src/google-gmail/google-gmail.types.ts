@@ -8,13 +8,17 @@ export interface GoogleGmailTokenResponse {
 
 export interface GoogleGmailConnection {
   connectionId: string;
-  scope?: string;
-  accessToken?: string;
+  accessToken: string;
   refreshToken?: string;
+  expiresIn?: number;
+  expiresAt?: number;
+  scope?: string;
+  tokenType?: string;
 }
 export interface GoogleGmailTokens {
   accessToken: string;
   refreshToken?: string;
+  expiresIn?: number;
   expiresAt?: number;
   scope?: string;
   tokenType?: string;

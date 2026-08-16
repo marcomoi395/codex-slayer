@@ -78,15 +78,31 @@ Google Cloud requirements:
 5. Add the redirect URI exactly:
    `http://localhost:3000/auth/google/gmail/callback`
 
-Manual test:
+OAuth flow:
 
 ```bash
-curl http://localhost:3000/auth/google/gmail/test
+curl -i http://localhost:3000/auth/google/gmail/authorize
 ```
 
-Open the returned `authorizationUrl`. Google redirects to `/callback`; the response returns an opaque `connectionId`.
+After Google redirects to `/callback`, the server writes the full OAuth credential to `credential.json`:
 
-The current module keeps tokens in memory. Add encrypted persistent storage and user/session binding before production use.
+```json
+{
+  "credential": {
+    "connectionId": "...",
+    "accessToken": "...",
+    "refreshToken": "...",
+    "expiresIn": 3600,
+    "expiresAt": 1730000000000,
+    "scope": "https://www.googleapis.com/auth/gmail.readonly",
+    "tokenType": "Bearer"
+  }
+}
+```
+
+The authorization `code` is not stored because it is one-time. `GOOGLE_CLIENT_SECRET` is app configuration, not user credential, so it is not written to this file.
+
+Fetch the OpenAI verification code with the in-memory connection:
 
 Interactive OAuth script:
 

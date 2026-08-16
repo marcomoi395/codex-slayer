@@ -16,4 +16,5 @@ node_modules/
 !.env.example
 
 # OS
+credential.json
 .DS_Store

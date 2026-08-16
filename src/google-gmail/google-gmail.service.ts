@@ -23,10 +23,6 @@ export class GoogleGmailService {
   constructor(
     @Inject(GOOGLE_GMAIL_CONFIG) private readonly config: GoogleGmailConfig,
   ) {}
-  getConfiguredConnectionId(): string | undefined {
-    return this.config.connectionId;
-  }
-
 
   createAuthorization(): GoogleGmailAuthorization {
     this.assertConfigured();
@@ -45,7 +41,6 @@ export class GoogleGmailService {
       state,
     });
 
-
     return {
       state,
       authorizationUrl: `${this.config.authorizationUrl}?${params.toString()}`,
@@ -53,7 +48,10 @@ export class GoogleGmailService {
     };
   }
 
-  async exchangeCode(code: string, state: string): Promise<GoogleGmailConnection> {
+  async exchangeCode(
+    code: string,
+    state: string,
+  ): Promise<GoogleGmailConnection> {
     this.assertConfigured();
     const createdAt = this.pendingStates.get(state);
     this.pendingStates.delete(state);
@@ -84,6 +82,7 @@ export class GoogleGmailService {
     const tokens: GoogleGmailTokens = {
       accessToken: tokenResponse.access_token,
       refreshToken: tokenResponse.refresh_token,
+      expiresIn: tokenResponse.expires_in,
       expiresAt: tokenResponse.expires_in
         ? Date.now() + tokenResponse.expires_in * 1000
         : undefined,
@@ -95,14 +94,14 @@ export class GoogleGmailService {
 
     return {
       connectionId,
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      expiresIn: tokens.expiresIn,
+      expiresAt: tokens.expiresAt,
       scope: tokens.scope,
-      ...(this.config.showTokens
-        ? { accessToken: tokens.accessToken, refreshToken: tokens.refreshToken }
-        : {}),
+      tokenType: tokens.tokenType,
     };
   }
-
-
   async getLatestOpenAiVerificationCode(connectionId: string): Promise<string> {
     const tokens = this.connections.get(connectionId);
     if (!tokens) {
@@ -142,7 +141,8 @@ export class GoogleGmailService {
       const code =
         body.match(
           /Enter this temporary verification code to continue:[\s\S]*?<p[^>]*>[\s\S]*?\b(\d{6})\b/i,
-        )?.[1] ?? body.match(/\bverification\s+code\b[\s\S]{0,100}?\b(\d{6})\b/i)?.[1];
+        )?.[1] ??
+        body.match(/\bverification\s+code\b[\s\S]{0,100}?\b(\d{6})\b/i)?.[1];
       if (code) {
         return code;
       }
@@ -150,8 +150,6 @@ export class GoogleGmailService {
 
     throw new NotFoundException('OpenAI verification code not found');
   }
-
-
 
   private asMessageIds(value: unknown): string[] {
     if (typeof value !== 'object' || value === null) {
@@ -164,7 +162,10 @@ export class GoogleGmailService {
     }
 
     return messages.flatMap((message) => {
-      const id = message && typeof message === 'object' ? Reflect.get(message, 'id') : undefined;
+      const id =
+        message && typeof message === 'object'
+          ? Reflect.get(message, 'id')
+          : undefined;
       return typeof id === 'string' ? [id] : [];
     });
   }
@@ -175,9 +176,12 @@ export class GoogleGmailService {
     }
 
     const body = Reflect.get(value, 'body');
-    const data = body && typeof body === 'object' ? Reflect.get(body, 'data') : undefined;
+    const data =
+      body && typeof body === 'object' ? Reflect.get(body, 'data') : undefined;
     const decoded =
-      typeof data === 'string' ? Buffer.from(data, 'base64url').toString('utf8') : '';
+      typeof data === 'string'
+        ? Buffer.from(data, 'base64url').toString('utf8')
+        : '';
     const parts = Reflect.get(value, 'parts');
     const nestedText = Array.isArray(parts)
       ? parts.map((part) => this.extractMessageText(part)).join('\n')
@@ -193,7 +197,11 @@ export class GoogleGmailService {
   }
 
   private assertConfigured(): void {
-    if (!this.config.clientId || !this.config.clientSecret || !this.config.redirectUri) {
+    if (
+      !this.config.clientId ||
+      !this.config.clientSecret ||
+      !this.config.redirectUri
+    ) {
       throw new Error(
         'GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URI are required',
       );
