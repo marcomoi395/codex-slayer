@@ -20,6 +20,17 @@ export class GoogleGmailController {
   testAuthorization() {
     return this.googleGmailService.createAuthorization();
   }
+  @Get('verification-code')
+  getVerificationCode(@Query('connectionId') connectionId?: string) {
+    const resolvedConnectionId = connectionId ?? this.googleGmailService.getConfiguredConnectionId();
+    if (!resolvedConnectionId) {
+      throw new BadRequestException(
+        'connectionId is required or GOOGLE_GMAIL_CONNECTION_ID must be configured',
+      );
+    }
+
+    return this.googleGmailService.getLatestOpenAiVerificationCode(resolvedConnectionId);
+  }
 
   @Get('callback')
   callback(

@@ -9,6 +9,8 @@ export interface GoogleGmailTokenResponse {
 export interface GoogleGmailConnection {
   connectionId: string;
   scope?: string;
+  accessToken?: string;
+  refreshToken?: string;
 }
 export interface GoogleGmailTokens {
   accessToken: string;

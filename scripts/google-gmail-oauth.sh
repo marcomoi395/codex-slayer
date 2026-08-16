@@ -45,7 +45,15 @@ if [[ "$actual_state" != "$expected_state" ]]; then
   exit 1
 fi
 
-curl -fsS -G \
+connection_response="$(curl -fsS -G \
   --data-urlencode "code=$code" \
   --data-urlencode "state=$actual_state" \
-  "$BASE_URL/auth/google/gmail/callback" | jq
+  "$BASE_URL/auth/google/gmail/callback")"
+
+if [[ "${GOOGLE_GMAIL_SHOW_TOKENS:-false}" == "true" ]]; then
+  jq '{accessToken, refreshToken, connectionId}' <<<"$connection_response"
+else
+  echo "$connection_response" | jq
+fi
+connection_id="$(jq -er '.connectionId' <<<"$connection_response")"
+printf '\nAdd to .env:\nGOOGLE_GMAIL_CONNECTION_ID=%s\n' "$connection_id"
