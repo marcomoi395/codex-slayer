@@ -65,19 +65,59 @@ describe('SmsPoolService', () => {
     });
   });
 
+  it('matches order_code and phonenumber from orders_new', async () => {
+    jest.spyOn(global, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify([
+          {
+            id: 4,
+            order_code: '3PVSYCMN',
+            phonenumber: '2096492394',
+            cc: '1',
+            code: '670301',
+            country: 'US',
+            service: 'OpenAI / ChatGPT',
+            service_id: 671,
+            status: 'completed',
+            cost: '0.14',
+            can_refund: false,
+            can_resend: true,
+            can_reactivate: false,
+            can_archive: true,
+            expiry: 1786771781,
+            full_code: 'Your OpenAI verification code is: 670301',
+          },
+        ]),
+        { status: 200 },
+      ),
+    );
+    const service = new SmsPoolService(config);
+
+    await expect(service.getCode('3PVSYCMN')).resolves.toEqual({
+      code: '670301',
+      received: true,
+    });
+  });
+
   it('polls orders until the requested order receives a code', async () => {
     jest
       .spyOn(global, 'fetch')
       .mockResolvedValueOnce(
         new Response(
-          JSON.stringify([{ order_id: 'order-1', number: '15550000000' }]),
+          JSON.stringify([
+            { order_code: 'order-1', phonenumber: '15550000000' },
+          ]),
           { status: 200 },
         ),
       )
       .mockResolvedValueOnce(
         new Response(
           JSON.stringify([
-            { order_id: 'order-1', number: '15550000000', code: '123456' },
+            {
+              order_code: 'order-1',
+              phonenumber: '15550000000',
+              code: '123456',
+            },
           ]),
           { status: 200 },
         ),

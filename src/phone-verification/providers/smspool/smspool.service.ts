@@ -12,6 +12,7 @@ import type {
 import { SMSPOOL_CONFIG, SMSPOOL_DEFAULTS } from './smspool.constants';
 import type { SmsPoolConfig } from './smspool.config';
 import type {
+  SmsPoolActiveOrderResponse,
   SmsPoolBalanceResponse,
   SmsPoolCancelResponse,
   SmsPoolOrder,
@@ -77,10 +78,9 @@ export class SmsPoolService extends PhoneVerificationProvider {
     while (true) {
       const orders = await this.getOrders();
       const order = orders.find((item) => item.orderId === orderId);
-      const code = order?.code ?? null;
 
-      if (code) {
-        return { code, received: true };
+      if (order?.code) {
+        return { code: order.code, received: true };
       }
 
       if (Date.now() >= deadline) {
@@ -104,7 +104,6 @@ export class SmsPoolService extends PhoneVerificationProvider {
       orderId: response.order_id ?? response.orderid ?? orderId,
     };
   }
-
   private async getOrders(): Promise<SmsPoolOrder[]> {
     const response = await this.request<unknown>('/request/orders_new', {
       format: 2,
@@ -117,20 +116,32 @@ export class SmsPoolService extends PhoneVerificationProvider {
       : (data.orders ?? data.data ?? []);
 
     return (Array.isArray(rows) ? rows : []).flatMap((row) => {
-      const item = this.asRecord(row);
-      const orderId = item.order_id ?? item.orderid;
-      const phoneNumber = item.phone_number ?? item.number;
+      const item = this.asRecord(row) as SmsPoolActiveOrderResponse;
+      const orderId = item.order_code;
+      const phoneNumber = item.phonenumber;
 
-      if (typeof orderId !== 'string' || typeof phoneNumber !== 'string') {
+      if (typeof orderId !== 'string' || phoneNumber === undefined) {
         return [];
       }
 
       return [
         {
+          id: item.id,
           orderId,
-          phoneNumber,
-          code: this.readCode(item),
-          expiresAt: this.readNumber(item.expires_at ?? item.expiry),
+          phoneNumber: String(phoneNumber),
+          countryCode: item.cc,
+          code: item.code ?? null,
+          country: item.country,
+          service: item.service,
+          serviceId: this.readNumber(item.service_id),
+          status: item.status,
+          cost: this.readNumber(item.cost),
+          canRefund: item.can_refund,
+          canResend: item.can_resend,
+          canReactivate: item.can_reactivate,
+          canArchive: item.can_archive,
+          expiresAt: this.readNumber(item.expiry),
+          fullCode: item.full_code,
         },
       ];
     });
