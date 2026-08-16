@@ -49,13 +49,25 @@ export class SmsPoolService extends PhoneVerificationProvider {
       pricing_option: options.pricingOption,
     });
 
+    const order = response.data ?? response;
+    const expiresAt = this.readNumber(order.expires_at ?? order.expiry);
+    const expiresIn = this.readNumber(order.expires_in);
+
     return {
       phoneNumber: this.required(
-        response.phone_number ?? response.number,
+        order.phone_number ??
+          order.number ??
+          order.phone ??
+          order.phoneNumber ??
+          order.phonenumber,
         'phone number',
       ),
-      orderId: this.required(response.order_id ?? response.orderid, 'order ID'),
-      expiresAt: response.expires_at ?? response.expiry,
+      orderId: this.required(order.order_id ?? order.orderid, 'order ID'),
+      expiresAt:
+        expiresAt ??
+        (expiresIn === undefined
+          ? undefined
+          : expiresIn + Math.floor(Date.now() / 1000)),
     };
   }
 
@@ -152,13 +164,12 @@ export class SmsPoolService extends PhoneVerificationProvider {
   }
 
   private required(value: unknown, field: string): string {
-    if (typeof value !== 'string' || value.length === 0) {
+    if (value === undefined || value === null || String(value).length === 0) {
       throw new Error(`SMSPool response missing ${field}`);
     }
 
-    return value;
+    return String(value);
   }
-
   private readCode(value: Record<string, unknown>): string | null {
     const code = value.code ?? value.sms_code ?? value.message;
     return typeof code === 'string' && code.length > 0 ? code : null;

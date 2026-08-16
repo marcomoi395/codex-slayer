@@ -43,6 +43,28 @@ describe('SmsPoolService', () => {
     expect(body.get('key')).toBe('test-key');
   });
 
+  it('maps the documented SMSPool purchase response shape', async () => {
+    jest.spyOn(global, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          success: 1,
+          data: {
+            order_id: 'order-2',
+            number: 15550000001,
+            expires_in: 599,
+          },
+        }),
+        { status: 200 },
+      ),
+    );
+    const service = new SmsPoolService(config);
+
+    await expect(service.getPhoneNumber()).resolves.toMatchObject({
+      orderId: 'order-2',
+      phoneNumber: '15550000001',
+    });
+  });
+
   it('polls orders until the requested order receives a code', async () => {
     jest
       .spyOn(global, 'fetch')

@@ -6,10 +6,15 @@ export interface SmsPoolBalanceResponse {
 export interface SmsPoolOrderResponse {
   order_id?: string;
   orderid?: string;
-  phone_number?: string;
-  number?: string;
-  expires_at?: number;
-  expiry?: number;
+  phone_number?: string | number;
+  number?: string | number;
+  phone?: string | number;
+  phoneNumber?: string | number;
+  phonenumber?: string | number;
+  expires_at?: number | string;
+  expiry?: number | string;
+  expires_in?: number | string;
+  data?: SmsPoolOrderResponse;
 }
 
 export interface SmsPoolOrder {
