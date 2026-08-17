@@ -14,6 +14,7 @@ export interface GoogleGmailConnection {
   expiresAt?: number;
   scope?: string;
   tokenType?: string;
+  emailAddress?: string;
 }
 export interface GoogleGmailTokens {
   accessToken: string;
@@ -22,6 +23,7 @@ export interface GoogleGmailTokens {
   expiresAt?: number;
   scope?: string;
   tokenType?: string;
+  emailAddress?: string;
 }
 
 export interface GoogleGmailAuthorization {

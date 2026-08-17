@@ -65,6 +65,7 @@ export class GoogleGmailController {
         {
           credential: {
             connectionId: connection.connectionId,
+            emailAddress: connection.emailAddress,
             accessToken: connection.accessToken,
             refreshToken: connection.refreshToken,
             expiresIn: connection.expiresIn,

@@ -79,6 +79,24 @@ export class GoogleGmailService {
     const payload: unknown = await response.json();
     const tokenResponse = this.asTokenResponse(payload);
 
+    const profileResponse = await fetch(
+      'https://gmail.googleapis.com/gmail/v1/users/me/profile',
+      { headers: { Authorization: `Bearer ${tokenResponse.access_token}` } },
+    );
+    if (!profileResponse.ok) {
+      throw new UnauthorizedException('Gmail profile lookup failed');
+    }
+
+    const profile: unknown = await profileResponse.json();
+    const emailValue =
+      profile && typeof profile === 'object'
+        ? Reflect.get(profile, 'emailAddress')
+        : undefined;
+    if (typeof emailValue !== 'string' || !emailValue) {
+      throw new UnauthorizedException('Gmail profile email is missing');
+    }
+    const emailAddress = emailValue;
+
     const tokens: GoogleGmailTokens = {
       accessToken: tokenResponse.access_token,
       refreshToken: tokenResponse.refresh_token,
@@ -88,6 +106,7 @@ export class GoogleGmailService {
         : undefined,
       scope: tokenResponse.scope,
       tokenType: tokenResponse.token_type,
+      emailAddress,
     };
     const connectionId = randomBytes(24).toString('base64url');
     this.connections.set(connectionId, tokens);
@@ -100,6 +119,7 @@ export class GoogleGmailService {
       expiresAt: tokens.expiresAt,
       scope: tokens.scope,
       tokenType: tokens.tokenType,
+      emailAddress: tokens.emailAddress,
     };
   }
   async getLatestOpenAiVerificationCode(connectionId: string): Promise<string> {

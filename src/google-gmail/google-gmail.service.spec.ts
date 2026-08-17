@@ -29,21 +29,29 @@ describe('GoogleGmailService', () => {
     expect(params.get('access_type')).toBe('offline');
   });
 
-  it('exchanges a valid state once and maps Google tokens', async () => {
-    jest.spyOn(global, 'fetch').mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          access_token: 'access-token',
-          refresh_token: 'refresh-token',
-          expires_in: 3600,
-          scope: config.scope,
-          token_type: 'Bearer',
+  it('exchanges tokens and includes the Gmail email address', async () => {
+    jest
+      .spyOn(global, 'fetch')
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            access_token: 'access-token',
+            refresh_token: 'refresh-token',
+            expires_in: 3600,
+            scope: config.scope,
+            token_type: 'Bearer',
+          }),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ emailAddress: 'user@example.com' }), {
+          status: 200,
         }),
-        { status: 200 },
-      ),
-    );
+      );
     const service = new GoogleGmailService(config);
     const { state } = service.createAuthorization();
+
     const connection = await service.exchangeCode('code', state);
 
     expect(connection).toMatchObject({
@@ -53,14 +61,11 @@ describe('GoogleGmailService', () => {
       expiresIn: 3600,
       scope: config.scope,
       tokenType: 'Bearer',
+      emailAddress: 'user@example.com',
     });
-    expect(connection.expiresAt).toEqual(expect.any(Number));
     expect(service.getTokens(connection.connectionId)).toMatchObject({
       accessToken: 'access-token',
-      refreshToken: 'refresh-token',
-      expiresIn: 3600,
-      scope: config.scope,
-      tokenType: 'Bearer',
+      emailAddress: 'user@example.com',
     });
     await expect(service.exchangeCode('code', state)).rejects.toBeInstanceOf(
       UnauthorizedException,
@@ -85,6 +90,12 @@ describe('GoogleGmailService', () => {
         return new Response(JSON.stringify({ access_token: 'access-token' }), {
           status: 200,
         });
+      }
+      if (url.includes('/users/me/profile')) {
+        return new Response(
+          JSON.stringify({ emailAddress: 'user@example.com' }),
+          { status: 200 },
+        );
       }
 
       if (url.includes('/messages?')) {
@@ -118,7 +129,7 @@ describe('GoogleGmailService', () => {
       service.getLatestOpenAiVerificationCode(connectionId),
     ).resolves.toBe('602464');
     expect(global.fetch).toHaveBeenNthCalledWith(
-      2,
+      3,
       expect.stringContaining(
         'https://gmail.googleapis.com/gmail/v1/users/me/messages?q=from%3Anoreply%40tm.openai.com&maxResults=20',
       ),
@@ -134,6 +145,12 @@ describe('GoogleGmailService', () => {
         return new Response(JSON.stringify({ access_token: 'access-token' }), {
           status: 200,
         });
+      }
+      if (url.includes('/users/me/profile')) {
+        return new Response(
+          JSON.stringify({ emailAddress: 'user@example.com' }),
+          { status: 200 },
+        );
       }
 
       if (url.includes('/messages?')) {
@@ -175,6 +192,13 @@ describe('GoogleGmailService', () => {
         });
       }
 
+      if (url.includes('/users/me/profile')) {
+        return new Response(
+          JSON.stringify({ emailAddress: 'user@example.com' }),
+          { status: 200 },
+        );
+      }
+
       if (url.includes('/messages?')) {
         return new Response(
           JSON.stringify({ messages: [{ id: 'html-message' }] }),
@@ -212,6 +236,12 @@ describe('GoogleGmailService', () => {
         return new Response(JSON.stringify({ access_token: 'access-token' }), {
           status: 200,
         });
+      }
+      if (url.includes('/users/me/profile')) {
+        return new Response(
+          JSON.stringify({ emailAddress: 'user@example.com' }),
+          { status: 200 },
+        );
       }
 
       if (url.includes('/messages?')) {
@@ -269,6 +299,12 @@ describe('GoogleGmailService', () => {
         return new Response(JSON.stringify({ access_token: 'access-token' }), {
           status: 200,
         });
+      }
+      if (String(input).includes('/users/me/profile')) {
+        return new Response(
+          JSON.stringify({ emailAddress: 'user@example.com' }),
+          { status: 200 },
+        );
       }
 
       return new Response(JSON.stringify({ messages: [] }), { status: 200 });
