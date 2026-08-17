@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  NotFoundException,
   ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -49,15 +50,39 @@ describe('CodexService', () => {
     getCredentialConnectionId: jest
       .fn()
       .mockResolvedValue('persisted-gmail-connection'),
-    getLatestOpenAiVerificationCode: jest.fn().mockResolvedValue('123456'),
-  } as unknown as GoogleGmailService;
+    getLatestOpenAiVerificationCode: jest
+      .fn()
+      .mockResolvedValue('123456'),
+  } as unknown as GoogleGmailService & {
+    getLatestOpenAiVerificationCode: jest.Mock;
+  };
 
   beforeEach(() => {
     jest.clearAllMocks();
+    googleGmailService.getLatestOpenAiVerificationCode.mockResolvedValue(
+      '123456',
+    );
   });
 
   afterEach(() => {
     jest.restoreAllMocks();
+  });
+
+  it('retries Gmail code lookup when the verification email has not arrived', async () => {
+    googleGmailService.getLatestOpenAiVerificationCode
+      .mockRejectedValueOnce(new NotFoundException())
+      .mockRejectedValueOnce(new NotFoundException())
+      .mockResolvedValueOnce('654321');
+    const service = new CodexService(config, googleGmailService);
+
+    await service.startAccountFlow({
+      email: 'user@example.com',
+      password: 'secret',
+    });
+
+    expect(
+      googleGmailService.getLatestOpenAiVerificationCode,
+    ).toHaveBeenCalledTimes(3);
   });
 
   it('resolves the Gmail connection from the account email', async () => {
@@ -138,7 +163,7 @@ describe('CodexService', () => {
     expect(page.locator.mock.results[4].value.click).toHaveBeenCalled();
     expect(
       googleGmailService.getLatestOpenAiVerificationCode,
-    ).toHaveBeenCalledWith('persisted-gmail-connection');
+    ).toHaveBeenCalledWith('persisted-gmail-connection', expect.any(Number));
 
     await service.onModuleDestroy();
   });

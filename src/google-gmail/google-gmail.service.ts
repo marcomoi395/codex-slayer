@@ -214,6 +214,7 @@ export class GoogleGmailService {
 
   async getLatestOpenAiVerificationCode(
     connectionId: string,
+    requestedAfterMs?: number,
   ): Promise<string> {
     let accessToken: unknown;
     try {
@@ -249,9 +250,10 @@ export class GoogleGmailService {
     if (typeof accessToken !== 'string') {
       throw new UnauthorizedException('Invalid Gmail connection');
     }
-
     const query = new URLSearchParams({
-      q: 'from:noreply@tm.openai.com',
+      q: requestedAfterMs
+        ? `from:noreply@tm.openai.com after:${Math.floor(requestedAfterMs / 1000)}`
+        : 'from:noreply@tm.openai.com',
       maxResults: '20',
     });
     const listResponse = await fetch(
@@ -287,6 +289,17 @@ export class GoogleGmailService {
       }
 
       const messagePayload: unknown = await messageResponse.json();
+      const internalDate =
+        messagePayload && typeof messagePayload === 'object'
+          ? Reflect.get(messagePayload, 'internalDate')
+          : undefined;
+      if (
+        requestedAfterMs !== undefined &&
+        (typeof internalDate !== 'string' ||
+          Number(internalDate) <= requestedAfterMs)
+      ) {
+        continue;
+      }
       const body = this.extractMessageText(messagePayload);
       const code =
         body.match(

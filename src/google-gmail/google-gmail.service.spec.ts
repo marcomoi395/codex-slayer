@@ -143,6 +143,45 @@ describe('GoogleGmailService', () => {
       }),
     );
   });
+  it('accepts a verification email that arrived before the OTP input rendered', async () => {
+    jest.spyOn(global, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/messages?')) {
+        return new Response(
+          JSON.stringify({
+            messages: [{ id: 'old-message' }, { id: 'new-message' }],
+          }),
+          { status: 200 },
+        );
+      }
+
+      const isOldMessage = url.includes('/old-message?');
+      return new Response(
+        JSON.stringify({
+          internalDate: isOldMessage ? '1000' : '3000',
+          payload: {
+            body: {
+              data: Buffer.from(
+                `Enter this temporary verification code to continue:\n\n${isOldMessage ? '111111' : '222222'}`,
+              ).toString('base64url'),
+            },
+          },
+        }),
+        { status: 200 },
+      );
+    });
+    const service = new GoogleGmailService(config);
+    const connections = Reflect.get(service, 'connections');
+    if (!(connections instanceof Map)) {
+      throw new Error('Gmail test connection store unavailable');
+    }
+    connections.set('gmail-connection', { accessToken: 'access-token' });
+
+    await expect(
+      service.getLatestOpenAiVerificationCode('gmail-connection', 2000),
+    ).resolves.toBe('222222');
+  });
+
   it('gets a verification code for the authorized credential email', async () => {
     jest.mocked(readFile).mockResolvedValue(
       JSON.stringify({

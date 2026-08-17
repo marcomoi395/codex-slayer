@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Inject,
   Injectable,
+  NotFoundException,
   OnModuleDestroy,
   ServiceUnavailableException,
   UnauthorizedException,
@@ -304,22 +305,47 @@ export class CodexService implements OnModuleDestroy {
       const passwordInput = page.locator('input[type="password"]');
       await passwordInput.waitFor({ state: 'visible', timeout: 10_000 });
       await passwordInput.fill(credentials.password);
-      await continueButton.click();
 
+      const verificationRequestedAt = Date.now();
+      await continueButton.click();
       const codeInput = page.locator(
         'input[autocomplete="one-time-code"], input[inputmode="numeric"], input[name*="code" i], input[id*="code" i]',
       );
       await codeInput.waitFor({ state: 'visible', timeout: 30_000 });
-      const verificationCode =
-        await this.googleGmailService.getLatestOpenAiVerificationCode(
-          credentials.connectionId,
-        );
+      const verificationCode = await this.getVerificationCodeWithRetry(
+        credentials.connectionId,
+        verificationRequestedAt,
+      );
       await codeInput.fill(verificationCode);
       await page.locator('button[type="submit"]').click();
-    } catch {
+    } catch (error) {
+      if (error instanceof NotFoundException || error instanceof UnauthorizedException) {
+        throw error;
+      }
       // Keep the browser open for manual completion if the provider UI changes.
     }
   }
+  private async getVerificationCodeWithRetry(
+    connectionId: string,
+    requestedAfterMs: number,
+  ): Promise<string> {
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        return await this.googleGmailService.getLatestOpenAiVerificationCode(
+          connectionId,
+          requestedAfterMs,
+        );
+      } catch (error) {
+        if (!(error instanceof NotFoundException) || attempt === 3) {
+          throw error;
+        }
+        await delay(2_000);
+      }
+    }
+
+    throw new NotFoundException('OpenAI verification code not found');
+  }
+
   private async launchBrowser(): Promise<Browser> {
     if (this.config.browserEngine === 'camoufox') {
       // Camoufox is ESM-only; load it only for the explicit opt-in engine.
