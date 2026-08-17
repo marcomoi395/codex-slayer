@@ -35,7 +35,12 @@ export class CodexService implements OnModuleDestroy {
 
   async startAccountFlow(): Promise<CodexStartResponse> {
     const authorization = await this.createAuthorizationLink();
-    await this.openBrowser();
+    try {
+      await this.openBrowser(authorization.authorizationUrl);
+    } catch (error) {
+      this.pending.delete(authorization.state);
+      throw error;
+    }
     return authorization;
   }
 
@@ -204,18 +209,22 @@ export class CodexService implements OnModuleDestroy {
     });
   }
 
-  private async openBrowser(): Promise<void> {
+  private async openBrowser(authorizationUrl: string): Promise<void> {
     try {
       this.browser = await chromium.launch({ headless: false });
       const context = await this.browser.newContext();
       const page = await context.newPage();
+      await page.goto(authorizationUrl, {
+        waitUntil: 'domcontentloaded',
+      });
       await page.goto(this.config.createAccountUrl, {
         waitUntil: 'domcontentloaded',
       });
     } catch {
+      await this.closeBrowser();
       await this.closeCallbackServer();
       throw new ServiceUnavailableException(
-        'Unable to start Playwright browser',
+        'Unable to start Playwright browser. Install the Playwright browser binary with `npx playwright install chromium`.',
       );
     }
   }

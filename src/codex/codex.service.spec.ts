@@ -1,7 +1,11 @@
-import { UnauthorizedException } from '@nestjs/common';
+import {
+  ServiceUnavailableException,
+  UnauthorizedException,
+} from '@nestjs/common';
 
-import { CodexService } from './codex.service';
+import { chromium } from 'playwright';
 import type { CodexConfig } from './codex.config';
+import { CodexService } from './codex.service';
 
 jest.mock('playwright', () => ({
   chromium: {
@@ -58,6 +62,22 @@ describe('CodexService', () => {
     expect(params.get('redirect_uri')).toBe(authorization.callbackUrl);
     expect(params.get('state')).toBe(authorization.state);
     expect(authorization.browserUrl).toBe(config.createAccountUrl);
+
+    await service.onModuleDestroy();
+  });
+
+  it('clears the pending flow when Playwright cannot launch', async () => {
+    jest
+      .spyOn(chromium, 'launch')
+      .mockRejectedValueOnce(new Error('missing browser'));
+    const service = new CodexService(config);
+
+    await expect(service.startAccountFlow()).rejects.toBeInstanceOf(
+      ServiceUnavailableException,
+    );
+    await expect(service.createAuthorizationLink()).resolves.toMatchObject({
+      callbackUrl: 'http://127.0.0.1:0/auth/callback',
+    });
 
     await service.onModuleDestroy();
   });
