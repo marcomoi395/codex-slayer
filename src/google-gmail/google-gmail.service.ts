@@ -54,14 +54,22 @@ export class GoogleGmailService {
     code: string,
     state: string,
   ): Promise<GoogleGmailConnection> {
+    console.log('[gmail] callback exchange started', {
+      hasCode: Boolean(code),
+      hasState: Boolean(state),
+    });
     this.assertConfigured();
     const createdAt = this.pendingStates.get(state);
     this.pendingStates.delete(state);
 
     if (!createdAt || Date.now() - createdAt > this.config.stateTtlMs) {
+      console.log('[gmail] oauth state invalid or expired');
       throw new UnauthorizedException('Invalid or expired OAuth state');
     }
 
+    console.log('[gmail] exchanging authorization code', {
+      tokenUrl: this.config.tokenUrl,
+    });
     const response = await fetch(this.config.tokenUrl, {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
@@ -74,17 +82,31 @@ export class GoogleGmailService {
       }),
     });
 
+    console.log('[gmail] token response received', {
+      status: response.status,
+      contentType: response.headers.get('content-type'),
+    });
     if (!response.ok) {
       throw new UnauthorizedException('Google OAuth token exchange failed');
     }
 
     const payload: unknown = await response.json();
     const tokenResponse = this.asTokenResponse(payload);
+    console.log('[gmail] token parsed', {
+      hasAccessToken: Boolean(tokenResponse.access_token),
+      hasRefreshToken: Boolean(tokenResponse.refresh_token),
+      expiresIn: tokenResponse.expires_in,
+    });
 
+    console.log('[gmail] loading profile');
     const profileResponse = await fetch(
       'https://gmail.googleapis.com/gmail/v1/users/me/profile',
       { headers: { Authorization: `Bearer ${tokenResponse.access_token}` } },
     );
+    console.log('[gmail] profile response received', {
+      status: profileResponse.status,
+      contentType: profileResponse.headers.get('content-type'),
+    });
     if (!profileResponse.ok) {
       throw new UnauthorizedException('Gmail profile lookup failed');
     }
@@ -112,6 +134,7 @@ export class GoogleGmailService {
     };
     const connectionId = randomBytes(24).toString('base64url');
     this.connections.set(connectionId, tokens);
+    console.log('[gmail] connection stored', { hasConnectionId: true });
 
     return {
       connectionId,
@@ -123,6 +146,43 @@ export class GoogleGmailService {
       tokenType: tokens.tokenType,
       emailAddress: tokens.emailAddress,
     };
+  }
+
+  async getCredentialConnectionId(email: string): Promise<string | undefined> {
+    let credentialEmail: unknown;
+    let connectionId: unknown;
+    try {
+      const content = await readFile(
+        resolve(process.cwd(), 'credential.json'),
+        'utf8',
+      );
+      const parsed: unknown = JSON.parse(content);
+      const credential =
+        parsed && typeof parsed === 'object'
+          ? Reflect.get(parsed, 'credential')
+          : undefined;
+      credentialEmail =
+        credential && typeof credential === 'object'
+          ? Reflect.get(credential, 'emailAddress')
+          : undefined;
+      connectionId =
+        credential && typeof credential === 'object'
+          ? Reflect.get(credential, 'connectionId')
+          : undefined;
+    } catch {
+      return undefined;
+    }
+
+    if (
+      typeof credentialEmail !== 'string' ||
+      typeof connectionId !== 'string' ||
+      this.normalizeCredentialEmail(credentialEmail) !==
+        this.normalizeCredentialEmail(email)
+    ) {
+      return undefined;
+    }
+
+    return connectionId;
   }
 
   async hasCredentialEmail(email: string): Promise<boolean> {
@@ -151,9 +211,42 @@ export class GoogleGmailService {
         this.normalizeCredentialEmail(email)
     );
   }
-  async getLatestOpenAiVerificationCode(connectionId: string): Promise<string> {
-    const tokens = this.connections.get(connectionId);
-    if (!tokens) {
+
+  async getLatestOpenAiVerificationCode(
+    connectionId: string,
+  ): Promise<string> {
+    let accessToken: unknown;
+    try {
+      const content = await readFile(
+        resolve(process.cwd(), 'credential.json'),
+        'utf8',
+      );
+      const parsed: unknown = JSON.parse(content);
+      const credential =
+        parsed && typeof parsed === 'object'
+          ? Reflect.get(parsed, 'credential')
+          : undefined;
+      const persistedConnectionId =
+        credential && typeof credential === 'object'
+          ? Reflect.get(credential, 'connectionId')
+          : undefined;
+      accessToken =
+        credential && typeof credential === 'object'
+          ? Reflect.get(credential, 'accessToken')
+          : undefined;
+      if (persistedConnectionId !== connectionId) accessToken = undefined;
+    } catch {
+      accessToken = undefined;
+    }
+
+    const runtimeTokens = this.connections.get(connectionId);
+    if (typeof accessToken !== 'string') {
+      accessToken = runtimeTokens?.accessToken;
+    }
+    console.log('[gmail] verification lookup started', {
+      hasPersistedConnection: typeof accessToken === 'string',
+    });
+    if (typeof accessToken !== 'string') {
       throw new UnauthorizedException('Invalid Gmail connection');
     }
 
@@ -163,24 +256,32 @@ export class GoogleGmailService {
     });
     const listResponse = await fetch(
       `https://gmail.googleapis.com/gmail/v1/users/me/messages?${query.toString()}`,
-      { headers: { Authorization: `Bearer ${tokens.accessToken}` } },
+      { headers: { Authorization: `Bearer ${accessToken}` } },
     );
-
+    console.log('[gmail] message list response received', {
+      status: listResponse.status,
+      contentType: listResponse.headers.get('content-type'),
+    });
     if (!listResponse.ok) {
       throw new UnauthorizedException('Gmail messages lookup failed');
     }
 
     const messageIds = this.asMessageIds(await listResponse.json());
+    console.log('[gmail] messages found', { count: messageIds.length });
     if (messageIds.length === 0) {
       throw new NotFoundException('OpenAI verification email not found');
     }
 
     for (const messageId of messageIds) {
+      console.log('[gmail] loading message', { hasMessageId: Boolean(messageId) });
       const messageResponse = await fetch(
         `https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(messageId)}?format=full`,
-        { headers: { Authorization: `Bearer ${tokens.accessToken}` } },
+        { headers: { Authorization: `Bearer ${accessToken}` } },
       );
-
+      console.log('[gmail] message response received', {
+        status: messageResponse.status,
+        contentType: messageResponse.headers.get('content-type'),
+      });
       if (!messageResponse.ok) {
         throw new UnauthorizedException('Gmail message lookup failed');
       }
@@ -193,10 +294,12 @@ export class GoogleGmailService {
         )?.[1] ??
         body.match(/\bverification\s+code\b[\s\S]{0,100}?\b(\d{6})\b/i)?.[1];
       if (code) {
+        console.log('[gmail] verification code found', { length: code.length });
         return code;
       }
     }
 
+    console.log('[gmail] verification code not found in messages');
     throw new NotFoundException('OpenAI verification code not found');
   }
 

@@ -7,6 +7,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import { createServer, type Server } from 'node:http';
 import { chromium } from 'playwright';
 import type { Browser, Page } from 'playwright-core';
@@ -26,6 +27,9 @@ interface PendingAuthorization extends CodexAuthorization {
   codeVerifier: string;
   redirectUri: string;
 }
+interface ResolvedAccountCredentials extends CodexAccountRequest {
+  connectionId: string;
+}
 
 @Injectable()
 export class CodexService implements OnModuleDestroy {
@@ -42,10 +46,13 @@ export class CodexService implements OnModuleDestroy {
   async startAccountFlow(
     credentials: CodexAccountRequest,
   ): Promise<CodexStartResponse> {
-    await this.validateAccountCredentials(credentials);
+    const connectionId = await this.validateAccountCredentials(credentials);
     const authorization = await this.createAuthorizationLink();
     try {
-      await this.openBrowser(authorization.authorizationUrl, credentials);
+      await this.openBrowser(authorization.authorizationUrl, {
+        ...credentials,
+        connectionId,
+      });
     } catch (error) {
       this.pending.delete(authorization.state);
       throw error;
@@ -96,6 +103,11 @@ export class CodexService implements OnModuleDestroy {
     state?: string,
     error?: string,
   ): Promise<CodexConnection> {
+    console.log('[codex] callback received', {
+      hasCode: Boolean(code),
+      hasState: Boolean(state),
+      hasError: Boolean(error),
+    });
     if (error) throw new UnauthorizedException(`Codex OAuth failed: ${error}`);
     if (!code || !state) {
       throw new BadRequestException('Codex callback requires code and state');
@@ -103,12 +115,16 @@ export class CodexService implements OnModuleDestroy {
 
     const session = this.pending.get(state);
     this.pending.delete(state);
+    console.log('[codex] callback state checked', { valid: Boolean(session) });
     if (!session || Date.now() - session.createdAt > this.config.stateTtlMs) {
       throw new UnauthorizedException(
         'Codex OAuth state is invalid or expired',
       );
     }
 
+    console.log('[codex] exchanging authorization code', {
+      tokenUrl: this.config.tokenUrl,
+    });
     const response = await fetch(this.config.tokenUrl, {
       method: 'POST',
       headers: {
@@ -124,11 +140,20 @@ export class CodexService implements OnModuleDestroy {
       }),
     });
 
+    console.log('[codex] token response received', {
+      status: response.status,
+      contentType: response.headers.get('content-type'),
+    });
     if (!response.ok) {
       throw new UnauthorizedException('Codex token exchange failed');
     }
 
     const token = await this.parseTokenResponse(response);
+    console.log('[codex] token parsed', {
+      hasAccessToken: Boolean(token.access_token),
+      hasRefreshToken: Boolean(token.refresh_token),
+      expiresIn: token.expires_in,
+    });
     const connection: CodexConnection = {
       connectionId: randomUUID(),
       accessToken: token.access_token,
@@ -157,7 +182,7 @@ export class CodexService implements OnModuleDestroy {
   }
   private async validateAccountCredentials(
     credentials: CodexAccountRequest,
-  ): Promise<void> {
+  ): Promise<string> {
     if (
       !credentials ||
       typeof credentials.email !== 'string' ||
@@ -168,13 +193,17 @@ export class CodexService implements OnModuleDestroy {
       throw new BadRequestException('Email and password are required');
     }
 
-    if (
-      !(await this.googleGmailService.hasCredentialEmail(credentials.email))
-    ) {
+    const connectionId =
+      await this.googleGmailService.getCredentialConnectionId(
+        credentials.email,
+      );
+    if (!connectionId) {
       throw new UnauthorizedException(
         'Gmail credential is not authorized for this email',
       );
     }
+
+    return connectionId;
   }
 
   private buildAuthorizationUrl(
@@ -228,7 +257,6 @@ export class CodexService implements OnModuleDestroy {
           response.writeHead(400).end('Codex authorization failed.'),
         );
     });
-
     await new Promise<void>((resolve, reject) => {
       this.callbackServer?.once('error', reject);
       this.callbackServer?.listen(
@@ -239,9 +267,10 @@ export class CodexService implements OnModuleDestroy {
     });
   }
 
+
   private async openBrowser(
     authorizationUrl: string,
-    credentials: CodexAccountRequest,
+    credentials: ResolvedAccountCredentials,
   ): Promise<void> {
     let page: Page;
     try {
@@ -281,6 +310,12 @@ export class CodexService implements OnModuleDestroy {
         'input[autocomplete="one-time-code"], input[inputmode="numeric"], input[name*="code" i], input[id*="code" i]',
       );
       await codeInput.waitFor({ state: 'visible', timeout: 30_000 });
+      const verificationCode =
+        await this.googleGmailService.getLatestOpenAiVerificationCode(
+          credentials.connectionId,
+        );
+      await codeInput.fill(verificationCode);
+      await page.locator('button[type="submit"]').click();
     } catch {
       // Keep the browser open for manual completion if the provider UI changes.
     }

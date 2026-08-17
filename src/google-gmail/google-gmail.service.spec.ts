@@ -143,6 +143,46 @@ describe('GoogleGmailService', () => {
       }),
     );
   });
+  it('gets a verification code for the authorized credential email', async () => {
+    jest.mocked(readFile).mockResolvedValue(
+      JSON.stringify({
+        credential: {
+          connectionId: 'gmail-connection',
+          emailAddress: 'user@example.com',
+        },
+      }),
+    );
+    jest.spyOn(global, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/messages?')) {
+        return new Response(JSON.stringify({ messages: [{ id: 'message' }] }), {
+          status: 200,
+        });
+      }
+      return new Response(
+        JSON.stringify({
+          payload: {
+            body: {
+              data: Buffer.from(
+                'Enter this temporary verification code to continue:\n\n123456',
+              ).toString('base64url'),
+            },
+          },
+        }),
+        { status: 200 },
+      );
+    });
+    const service = new GoogleGmailService(config);
+    const connections = Reflect.get(service, 'connections');
+    if (!(connections instanceof Map)) {
+      throw new Error('Gmail test connection store unavailable');
+    }
+    connections.set('gmail-connection', { accessToken: 'access-token' });
+
+    await expect(
+      service.getCredentialConnectionId('user@example.com'),
+    ).resolves.toBe('gmail-connection');
+  });
   it('ignores unrelated six-digit numbers before the verification code', async () => {
     jest.spyOn(global, 'fetch').mockImplementation(async (input) => {
       const url = String(input);

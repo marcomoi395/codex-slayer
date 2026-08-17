@@ -46,32 +46,31 @@ const config: CodexConfig = {
 };
 describe('CodexService', () => {
   const googleGmailService = {
-    hasCredentialEmail: jest.fn().mockResolvedValue(true),
+    getCredentialConnectionId: jest
+      .fn()
+      .mockResolvedValue('persisted-gmail-connection'),
+    getLatestOpenAiVerificationCode: jest.fn().mockResolvedValue('123456'),
   } as unknown as GoogleGmailService;
 
   beforeEach(() => {
     jest.clearAllMocks();
-    (googleGmailService.hasCredentialEmail as jest.Mock).mockResolvedValue(
-      true,
-    );
   });
 
   afterEach(() => {
     jest.restoreAllMocks();
   });
 
-  it('validates account credentials before starting the browser flow', async () => {
+  it('resolves the Gmail connection from the account email', async () => {
     const service = new CodexService(config, googleGmailService);
     const authorization = await service.startAccountFlow({
       email: 'user@example.com',
       password: 'secret',
     });
 
-    expect(googleGmailService.hasCredentialEmail).toHaveBeenCalledWith(
+    expect(googleGmailService.getCredentialConnectionId).toHaveBeenCalledWith(
       'user@example.com',
     );
     expect(authorization.browserUrl).toBe(config.createAccountUrl);
-
     await service.onModuleDestroy();
   });
 
@@ -79,24 +78,13 @@ describe('CodexService', () => {
     const service = new CodexService(config, googleGmailService);
 
     await expect(
-      service.startAccountFlow({ email: '', password: '' }),
+      service.startAccountFlow({
+        email: '',
+        password: '',
+      }),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it('rejects an email without an authorized Gmail credential', async () => {
-    (googleGmailService.hasCredentialEmail as jest.Mock).mockResolvedValueOnce(
-      false,
-    );
-    const service = new CodexService(config, googleGmailService);
-
-    await expect(
-      service.startAccountFlow({
-        email: 'unverified@example.com',
-        password: 'secret',
-      }),
-    ).rejects.toBeInstanceOf(UnauthorizedException);
-    expect(chromium.launch).not.toHaveBeenCalled();
-  });
 
   it('fills the account email and password in the browser', async () => {
     const service = new CodexService(config, googleGmailService);
@@ -143,6 +131,14 @@ describe('CodexService', () => {
       state: 'visible',
       timeout: 30_000,
     });
+    expect(page.locator.mock.results[3].value.fill).toHaveBeenCalledWith(
+      '123456',
+    );
+    expect(page.locator).toHaveBeenNthCalledWith(5, 'button[type="submit"]');
+    expect(page.locator.mock.results[4].value.click).toHaveBeenCalled();
+    expect(
+      googleGmailService.getLatestOpenAiVerificationCode,
+    ).toHaveBeenCalledWith('persisted-gmail-connection');
 
     await service.onModuleDestroy();
   });
@@ -219,7 +215,10 @@ describe('CodexService', () => {
     const service = new CodexService(config, googleGmailService);
 
     await expect(
-      service.startAccountFlow({ email: 'user@example.com', password: 'secret' }),
+      service.startAccountFlow({
+        email: 'user@example.com',
+        password: 'secret',
+      }),
     ).rejects.toBeInstanceOf(ServiceUnavailableException);
     await expect(service.createAuthorizationLink()).resolves.toMatchObject({
       callbackUrl: 'http://127.0.0.1:0/auth/callback',

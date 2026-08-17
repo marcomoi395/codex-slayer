@@ -26,15 +26,17 @@ describe('GoogleGmailController', () => {
     );
   });
 
-  it('checks whether an email exists in credential.json', async () => {
+  it('returns the connection ID for an authorized email', async () => {
     const service = {
-      hasCredentialEmail: jest.fn().mockResolvedValue(true),
+      getCredentialConnectionId: jest
+        .fn()
+        .mockResolvedValue('gmail-connection-id'),
     } as unknown as GoogleGmailService;
     const controller = new GoogleGmailController(service);
 
     await expect(
       controller.checkEmail({ email: 'c.ontact.youngmarco@gmail.com' }),
-    ).resolves.toEqual({ exists: true });
+    ).resolves.toEqual({ connectionId: 'gmail-connection-id' });
   });
 
   it('rejects an empty email check request', async () => {

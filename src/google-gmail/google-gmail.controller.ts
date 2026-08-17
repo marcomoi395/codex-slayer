@@ -31,9 +31,11 @@ export class GoogleGmailController {
     if (typeof body?.email !== 'string' || !body.email.trim()) {
       throw new BadRequestException('email is required');
     }
-    const email = body.email.trim();
 
-    return { exists: await this.googleGmailService.hasCredentialEmail(email) };
+    const connectionId = await this.googleGmailService.getCredentialConnectionId(
+      body.email.trim(),
+    );
+    return { connectionId: connectionId ?? null };
   }
 
   @Post('verification-code')
