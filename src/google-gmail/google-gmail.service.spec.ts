@@ -1,5 +1,10 @@
+import { readFile } from 'node:fs/promises';
+
 import { UnauthorizedException } from '@nestjs/common';
 
+jest.mock('node:fs/promises', () => ({
+  readFile: jest.fn(),
+}));
 import { GoogleGmailService } from './google-gmail.service';
 import type { GoogleGmailConfig } from './google-gmail.config';
 
@@ -316,5 +321,31 @@ describe('GoogleGmailService', () => {
     await expect(
       service.getLatestOpenAiVerificationCode(connectionId),
     ).rejects.toThrow('OpenAI verification email not found');
+  });
+
+  it('matches Gmail dot aliases in credential.json', async () => {
+    jest.mocked(readFile).mockResolvedValue(
+      JSON.stringify({
+        credential: { emailAddress: 'contact.youngmarco@gmail.com' },
+      }),
+    );
+    const service = new GoogleGmailService(config);
+
+    await expect(
+      service.hasCredentialEmail('c.ontact.youngmarco@gmail.com'),
+    ).resolves.toBe(true);
+  });
+
+  it('returns false when credential email does not match', async () => {
+    jest.mocked(readFile).mockResolvedValue(
+      JSON.stringify({
+        credential: { emailAddress: 'contact.youngmarco@gmail.com' },
+      }),
+    );
+    const service = new GoogleGmailService(config);
+
+    await expect(
+      service.hasCredentialEmail('other@example.com'),
+    ).resolves.toBe(false);
   });
 });

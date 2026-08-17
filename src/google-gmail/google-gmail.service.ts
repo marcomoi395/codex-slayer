@@ -4,7 +4,9 @@ import {
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
+import { readFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
+import { resolve } from 'node:path';
 
 import { GOOGLE_GMAIL_CONFIG } from './google-gmail.constants';
 import type { GoogleGmailConfig } from './google-gmail.config';
@@ -122,6 +124,33 @@ export class GoogleGmailService {
       emailAddress: tokens.emailAddress,
     };
   }
+
+  async hasCredentialEmail(email: string): Promise<boolean> {
+    let credentialEmail: unknown;
+    try {
+      const content = await readFile(
+        resolve(process.cwd(), 'credential.json'),
+        'utf8',
+      );
+      const parsed: unknown = JSON.parse(content);
+      const credential =
+        parsed && typeof parsed === 'object'
+          ? Reflect.get(parsed, 'credential')
+          : undefined;
+      credentialEmail =
+        credential && typeof credential === 'object'
+          ? Reflect.get(credential, 'emailAddress')
+          : undefined;
+    } catch {
+      return false;
+    }
+
+    return (
+      typeof credentialEmail === 'string' &&
+      this.normalizeCredentialEmail(credentialEmail) ===
+        this.normalizeCredentialEmail(email)
+    );
+  }
   async getLatestOpenAiVerificationCode(connectionId: string): Promise<string> {
     const tokens = this.connections.get(connectionId);
     if (!tokens) {
@@ -238,5 +267,19 @@ export class GoogleGmailService {
     }
 
     return value as GoogleGmailTokenResponse;
+  }
+
+  private normalizeCredentialEmail(email: string): string {
+    const normalized = email.trim().toLowerCase();
+    const separator = normalized.lastIndexOf('@');
+    if (separator < 1) {
+      return normalized;
+    }
+
+    const localPart = normalized.slice(0, separator);
+    const domain = normalized.slice(separator + 1);
+    return domain === 'gmail.com'
+      ? `${localPart.replaceAll('.', '')}@${domain}`
+      : normalized;
   }
 }

@@ -26,6 +26,16 @@ export class GoogleGmailController {
       statusCode: 302,
     };
   }
+  @Post('check-email')
+  async checkEmail(@Body() body: { email?: string }) {
+    if (typeof body?.email !== 'string' || !body.email.trim()) {
+      throw new BadRequestException('email is required');
+    }
+    const email = body.email.trim();
+
+    return { exists: await this.googleGmailService.hasCredentialEmail(email) };
+  }
+
   @Post('verification-code')
   getVerificationCode(
     @Body() body: { credential?: { connectionId?: string } },

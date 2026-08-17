@@ -25,4 +25,26 @@ describe('GoogleGmailController', () => {
       expect.stringContaining('"emailAddress": "user@example.com"'),
     );
   });
+
+  it('checks whether an email exists in credential.json', async () => {
+    const service = {
+      hasCredentialEmail: jest.fn().mockResolvedValue(true),
+    } as unknown as GoogleGmailService;
+    const controller = new GoogleGmailController(service);
+
+    await expect(
+      controller.checkEmail({ email: 'c.ontact.youngmarco@gmail.com' }),
+    ).resolves.toEqual({ exists: true });
+  });
+
+  it('rejects an empty email check request', async () => {
+    const service = {
+      hasCredentialEmail: jest.fn(),
+    } as unknown as GoogleGmailService;
+    const controller = new GoogleGmailController(service);
+
+    await expect(controller.checkEmail({ email: ' ' })).rejects.toThrow(
+      'email is required',
+    );
+  });
 });
