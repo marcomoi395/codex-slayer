@@ -5,6 +5,7 @@ import { AppService } from './app.service';
 import { PhoneVerificationModule } from './phone-verification/phone-verification.module';
 import { SmsPoolModule } from './phone-verification/providers/smspool/smspool.module';
 import { GoogleGmailModule } from './google-gmail/google-gmail.module';
+import { CodexModule } from './codex/codex.module';
 
 @Module({
   imports: [
@@ -12,6 +13,7 @@ import { GoogleGmailModule } from './google-gmail/google-gmail.module';
     PhoneVerificationModule,
     SmsPoolModule,
     GoogleGmailModule,
+    CodexModule,
   ],
   controllers: [AppController],
   providers: [AppService],
