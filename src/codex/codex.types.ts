@@ -28,3 +28,8 @@ export interface CodexStartResponse extends CodexAuthorization {
   callbackUrl: string;
   browserUrl: string;
 }
+
+export interface CodexAccountRequest {
+  email: string;
+  password: string;
+}

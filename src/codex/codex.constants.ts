@@ -8,5 +8,6 @@ export const CODEX_DEFAULTS = {
   callbackPort: 1455,
   callbackPath: '/auth/callback',
   createAccountUrl: 'https://auth.openai.com/create-account',
+  browserEngine: 'camoufox',
   stateTtlMs: 10 * 60 * 1000,
 } as const;

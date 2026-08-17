@@ -1,6 +1,7 @@
-import { Controller, Get, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Post, Query } from '@nestjs/common';
 
 import { CodexService } from './codex.service';
+import type { CodexAccountRequest } from './codex.types';
 
 @Controller('auth/codex')
 export class CodexController {
@@ -12,8 +13,8 @@ export class CodexController {
   }
 
   @Post('accounts')
-  startAccountFlow() {
-    return this.codexService.startAccountFlow();
+  startAccountFlow(@Body() credentials: CodexAccountRequest) {
+    return this.codexService.startAccountFlow(credentials);
   }
 
   @Get('callback')

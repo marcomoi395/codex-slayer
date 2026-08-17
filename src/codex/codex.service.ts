@@ -8,11 +8,14 @@ import {
 } from '@nestjs/common';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
-import { chromium, type Browser } from 'playwright';
+import { chromium } from 'playwright';
+import type { Browser, Page } from 'playwright-core';
 
 import { CODEX_CONFIG } from './codex.constants';
 import type { CodexConfig } from './codex.config';
+import { GoogleGmailService } from '../google-gmail/google-gmail.service';
 import type {
+  CodexAccountRequest,
   CodexAuthorization,
   CodexConnection,
   CodexStartResponse,
@@ -31,12 +34,18 @@ export class CodexService implements OnModuleDestroy {
   private browser?: Browser;
   private callbackServer?: Server;
 
-  constructor(@Inject(CODEX_CONFIG) private readonly config: CodexConfig) {}
+  constructor(
+    @Inject(CODEX_CONFIG) private readonly config: CodexConfig,
+    private readonly googleGmailService: GoogleGmailService,
+  ) {}
 
-  async startAccountFlow(): Promise<CodexStartResponse> {
+  async startAccountFlow(
+    credentials: CodexAccountRequest,
+  ): Promise<CodexStartResponse> {
+    await this.validateAccountCredentials(credentials);
     const authorization = await this.createAuthorizationLink();
     try {
-      await this.openBrowser(authorization.authorizationUrl);
+      await this.openBrowser(authorization.authorizationUrl, credentials);
     } catch (error) {
       this.pending.delete(authorization.state);
       throw error;
@@ -146,6 +155,27 @@ export class CodexService implements OnModuleDestroy {
     await this.closeBrowser();
     await this.closeCallbackServer();
   }
+  private async validateAccountCredentials(
+    credentials: CodexAccountRequest,
+  ): Promise<void> {
+    if (
+      !credentials ||
+      typeof credentials.email !== 'string' ||
+      !credentials.email.trim() ||
+      typeof credentials.password !== 'string' ||
+      !credentials.password
+    ) {
+      throw new BadRequestException('Email and password are required');
+    }
+
+    if (
+      !(await this.googleGmailService.hasCredentialEmail(credentials.email))
+    ) {
+      throw new UnauthorizedException(
+        'Gmail credential is not authorized for this email',
+      );
+    }
+  }
 
   private buildAuthorizationUrl(
     redirectUri: string,
@@ -209,24 +239,63 @@ export class CodexService implements OnModuleDestroy {
     });
   }
 
-  private async openBrowser(authorizationUrl: string): Promise<void> {
+  private async openBrowser(
+    authorizationUrl: string,
+    credentials: CodexAccountRequest,
+  ): Promise<void> {
+    let page: Page;
     try {
-      this.browser = await chromium.launch({ headless: false });
+      this.browser = await this.launchBrowser();
       const context = await this.browser.newContext();
-      const page = await context.newPage();
+      page = await context.newPage();
       await page.goto(authorizationUrl, {
-        waitUntil: 'domcontentloaded',
-      });
-      await page.goto(this.config.createAccountUrl, {
         waitUntil: 'domcontentloaded',
       });
     } catch {
       await this.closeBrowser();
       await this.closeCallbackServer();
       throw new ServiceUnavailableException(
-        'Unable to start Playwright browser. Install the Playwright browser binary with `npx playwright install chromium`.',
+        'Unable to start browser. Install the selected browser runtime first.',
       );
     }
+
+    try {
+      const signUpLink = page.getByRole('link', { name: /sign up/i });
+      await signUpLink.waitFor({ state: 'visible', timeout: 10_000 });
+      await signUpLink.click();
+
+      const emailInput = page.locator('input[type="email"]');
+      await emailInput.waitFor({ state: 'visible', timeout: 10_000 });
+      await emailInput.fill(credentials.email);
+
+      const continueButton = page.locator('button[type="submit"]');
+      await continueButton.waitFor({ state: 'visible', timeout: 10_000 });
+      await continueButton.click();
+
+      const passwordInput = page.locator('input[type="password"]');
+      await passwordInput.waitFor({ state: 'visible', timeout: 10_000 });
+      await passwordInput.fill(credentials.password);
+      await continueButton.click();
+
+      const codeInput = page.locator(
+        'input[autocomplete="one-time-code"], input[inputmode="numeric"], input[name*="code" i], input[id*="code" i]',
+      );
+      await codeInput.waitFor({ state: 'visible', timeout: 30_000 });
+    } catch {
+      // Keep the browser open for manual completion if the provider UI changes.
+    }
+  }
+  private async launchBrowser(): Promise<Browser> {
+    if (this.config.browserEngine === 'camoufox') {
+      // Camoufox is ESM-only; load it only for the explicit opt-in engine.
+      const { Camoufox } = await import('camoufox-js');
+      return Camoufox({
+        headless: false,
+        humanize: 0.5,
+      });
+    }
+
+    return chromium.launch({ headless: false }) as unknown as Browser;
   }
 
   private async closeBrowser(): Promise<void> {

@@ -7,5 +7,6 @@ export interface CodexConfig {
   callbackPort: number;
   callbackPath: string;
   createAccountUrl: string;
+  browserEngine: 'playwright' | 'camoufox';
   stateTtlMs: number;
 }

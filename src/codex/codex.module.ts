@@ -1,13 +1,14 @@
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { Module } from '@nestjs/common';
 
+import { GoogleGmailModule } from '../google-gmail/google-gmail.module';
 import { CODEX_CONFIG, CODEX_DEFAULTS } from './codex.constants';
 import type { CodexConfig } from './codex.config';
 import { CodexController } from './codex.controller';
 import { CodexService } from './codex.service';
 
 @Module({
-  imports: [ConfigModule],
+  imports: [ConfigModule, GoogleGmailModule],
   controllers: [CodexController],
   providers: [
     {
@@ -34,6 +35,10 @@ import { CodexService } from './codex.service';
         createAccountUrl:
           configService.get<string>('CODEX_CREATE_ACCOUNT_URL') ??
           CODEX_DEFAULTS.createAccountUrl,
+        browserEngine:
+          configService.get<string>('CODEX_BROWSER') === 'playwright'
+            ? 'playwright'
+            : CODEX_DEFAULTS.browserEngine,
         stateTtlMs: CODEX_DEFAULTS.stateTtlMs,
       }),
     },
