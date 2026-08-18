@@ -19,11 +19,27 @@ import type {
   SmsPoolOrderResponse,
 } from './smspool.types';
 
+export interface PurchasedSmsPoolOrder {
+  orderId: string;
+  phoneNumber: string;
+  expiresAt?: number;
+  status?: string;
+  code?: string;
+  received?: boolean;
+}
+
 @Injectable()
 export class SmsPoolService extends PhoneVerificationProvider {
+  private readonly purchasedOrders = new Map<string, PurchasedSmsPoolOrder>();
+
   constructor(@Inject(SMSPOOL_CONFIG) private readonly config: SmsPoolConfig) {
     super();
   }
+
+  getPurchasedOrders(): PurchasedSmsPoolOrder[] {
+    return [...this.purchasedOrders.values()].map((order) => ({ ...order }));
+  }
+
 
   async getBalance(): Promise<BalanceResult> {
     const response =
@@ -54,7 +70,7 @@ export class SmsPoolService extends PhoneVerificationProvider {
     const expiresAt = this.readNumber(order.expires_at ?? order.expiry);
     const expiresIn = this.readNumber(order.expires_in);
 
-    return {
+    const result = {
       phoneNumber: this.required(
         order.phone_number ??
           order.number ??
@@ -70,6 +86,9 @@ export class SmsPoolService extends PhoneVerificationProvider {
           ? undefined
           : expiresIn + Math.floor(Date.now() / 1000)),
     };
+
+    this.purchasedOrders.set(result.orderId, result);
+    return result;
   }
 
   async getCode(orderId: string): Promise<VerificationCodeResult> {
@@ -78,12 +97,20 @@ export class SmsPoolService extends PhoneVerificationProvider {
     while (true) {
       const orders = await this.getOrders();
       const order = orders.find((item) => item.orderId === orderId);
+      const tracked = this.purchasedOrders.get(orderId);
+
+      if (tracked && order) {
+        tracked.status = order.status;
+        if (order.code) tracked.code = order.code;
+      }
 
       if (order?.code) {
+        if (tracked) tracked.received = true;
         return { code: order.code, received: true };
       }
 
       if (Date.now() >= deadline) {
+        if (tracked) tracked.received = false;
         break;
       }
 
@@ -99,8 +126,12 @@ export class SmsPoolService extends PhoneVerificationProvider {
       expiry: expiresAt ?? Math.floor(Date.now() / 1000),
     });
 
+    const refunded = Boolean(response.refunded ?? response.success);
+    const tracked = this.purchasedOrders.get(orderId);
+    if (tracked) tracked.status = refunded ? 'refunded' : 'refund_failed';
+
     return {
-      refunded: Boolean(response.refunded ?? response.success),
+      refunded,
       orderId: response.order_id ?? response.orderid ?? orderId,
     };
   }

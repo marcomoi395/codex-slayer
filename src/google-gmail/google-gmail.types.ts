@@ -25,6 +25,12 @@ export interface GoogleGmailTokens {
   tokenType?: string;
   emailAddress?: string;
 }
+export interface GoogleGmailConnectionSummary {
+  connectionId: string;
+  emailAddress: string;
+  expiresAt?: number;
+  scope?: string;
+}
 
 export interface GoogleGmailAuthorization {
   state: string;

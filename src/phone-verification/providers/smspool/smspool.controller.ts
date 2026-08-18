@@ -15,6 +15,10 @@ export class SmsPoolController {
   getBalance() {
     return this.smsPoolService.getBalance();
   }
+  @Get('orders')
+  getPurchasedOrders() {
+    return this.smsPoolService.getPurchasedOrders();
+  }
 
   @Post('phone-number')
   getPhoneNumber() {

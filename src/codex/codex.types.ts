@@ -33,3 +33,21 @@ export interface CodexAccountRequest {
   email: string;
   password: string;
 }
+export interface CodexAccountSummary {
+  email: string;
+  connectionId?: string;
+}
+
+export interface CodexStatusLog {
+  at: number;
+  message: string;
+  level?: string;
+}
+
+export interface CodexStatus {
+  active: boolean;
+  state?: string;
+  email?: string;
+  step?: string;
+  logs: CodexStatusLog[];
+}

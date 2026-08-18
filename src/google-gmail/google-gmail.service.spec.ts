@@ -1,9 +1,10 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 
 import { UnauthorizedException } from '@nestjs/common';
 
 jest.mock('node:fs/promises', () => ({
   readFile: jest.fn(),
+  writeFile: jest.fn(),
 }));
 import { GoogleGmailService } from './google-gmail.service';
 import type { GoogleGmailConfig } from './google-gmail.config';
@@ -141,6 +142,81 @@ describe('GoogleGmailService', () => {
       expect.objectContaining({
         headers: { Authorization: 'Bearer access-token' },
       }),
+    );
+  });
+  it('refreshes an expired access token, retries Gmail, and persists the new token', async () => {
+    jest.mocked(readFile).mockResolvedValue(
+      JSON.stringify({
+        credentials: [
+          {
+            connectionId: 'gmail-connection',
+            emailAddress: 'user@example.com',
+            accessToken: 'expired-access-token',
+            refreshToken: 'refresh-token',
+          },
+        ],
+      }),
+    );
+    jest.spyOn(global, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/messages?')) {
+        const authorization = (global.fetch as jest.Mock).mock.calls.at(-1)?.[1]
+          ?.headers?.Authorization;
+        if (authorization === 'Bearer expired-access-token') {
+          return new Response('{}', { status: 401 });
+        }
+        return new Response(JSON.stringify({ messages: [{ id: 'message' }] }), {
+          status: 200,
+        });
+      }
+      if (url === config.tokenUrl) {
+        return new Response(
+          JSON.stringify({
+            access_token: 'refreshed-access-token',
+            expires_in: 3600,
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          payload: {
+            body: {
+              data: Buffer.from(
+                'Enter this temporary verification code to continue:\n\n654321',
+              ).toString('base64url'),
+            },
+          },
+        }),
+        { status: 200 },
+      );
+    });
+    const service = new GoogleGmailService(config);
+
+    await expect(
+      service.getLatestOpenAiVerificationCode('gmail-connection'),
+    ).resolves.toBe('654321');
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      config.tokenUrl,
+      expect.objectContaining({
+        method: 'POST',
+        body: expect.any(URLSearchParams),
+      }),
+    );
+    const refreshRequest = (global.fetch as jest.Mock).mock.calls.find(
+      ([input]) => input === config.tokenUrl,
+    )?.[1];
+    expect(refreshRequest.body.toString()).toContain(
+      'grant_type=refresh_token',
+    );
+    expect(refreshRequest.body.toString()).toContain(
+      'refresh_token=refresh-token',
+    );
+    expect(writeFile).toHaveBeenCalledWith(
+      expect.stringMatching(/credential\.json$/),
+      expect.stringContaining('refreshed-access-token'),
+      'utf8',
     );
   });
   it('accepts a verification email that arrived before the OTP input rendered', async () => {
@@ -426,5 +502,24 @@ describe('GoogleGmailService', () => {
     await expect(
       service.hasCredentialEmail('other@example.com'),
     ).resolves.toBe(false);
+  });
+
+  it('finds a matching email in persisted credentials', async () => {
+    jest.mocked(readFile).mockResolvedValue(
+      JSON.stringify({
+        credentials: [
+          { connectionId: 'old-connection', emailAddress: 'old@example.com' },
+          {
+            connectionId: 'new-connection',
+            emailAddress: 'new@example.com',
+          },
+        ],
+      }),
+    );
+    const service = new GoogleGmailService(config);
+
+    await expect(
+      service.getCredentialConnectionId('new@example.com'),
+    ).resolves.toBe('new-connection');
   });
 });

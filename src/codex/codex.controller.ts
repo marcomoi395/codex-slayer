@@ -12,6 +12,16 @@ export class CodexController {
     return this.codexService.createAuthorizationLink();
   }
 
+
+  @Get('status')
+  getStatus() {
+    return this.codexService.getStatus();
+  }
+
+  @Get('accounts')
+  getAccounts() {
+    return this.codexService.getAccounts();
+  }
   @Post('accounts')
   startAccountFlow(@Body() credentials: CodexAccountRequest) {
     return this.codexService.startAccountFlow(credentials);

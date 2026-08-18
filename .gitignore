@@ -17,4 +17,5 @@ node_modules/
 
 # OS
 credential.json
+codex-accounts.json
 .DS_Store

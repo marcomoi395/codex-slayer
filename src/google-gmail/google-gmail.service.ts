@@ -4,7 +4,7 @@ import {
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { resolve } from 'node:path';
 
@@ -13,6 +13,7 @@ import type { GoogleGmailConfig } from './google-gmail.config';
 import type {
   GoogleGmailAuthorization,
   GoogleGmailConnection,
+  GoogleGmailConnectionSummary,
   GoogleGmailTokenResponse,
   GoogleGmailTokens,
 } from './google-gmail.types';
@@ -149,107 +150,129 @@ export class GoogleGmailService {
   }
 
   async getCredentialConnectionId(email: string): Promise<string | undefined> {
-    let credentialEmail: unknown;
-    let connectionId: unknown;
-    try {
-      const content = await readFile(
-        resolve(process.cwd(), 'credential.json'),
-        'utf8',
-      );
-      const parsed: unknown = JSON.parse(content);
-      const credential =
-        parsed && typeof parsed === 'object'
-          ? Reflect.get(parsed, 'credential')
-          : undefined;
-      credentialEmail =
-        credential && typeof credential === 'object'
-          ? Reflect.get(credential, 'emailAddress')
-          : undefined;
-      connectionId =
-        credential && typeof credential === 'object'
-          ? Reflect.get(credential, 'connectionId')
-          : undefined;
-    } catch {
-      return undefined;
+    const normalizedEmail = this.normalizeCredentialEmail(email);
+    for (const credential of await this.readPersistedCredentials()) {
+      const credentialEmail = Reflect.get(credential, 'emailAddress');
+      const connectionId = Reflect.get(credential, 'connectionId');
+      if (
+        typeof credentialEmail === 'string' &&
+        typeof connectionId === 'string' &&
+        this.normalizeCredentialEmail(credentialEmail) === normalizedEmail
+      ) {
+        return connectionId;
+      }
+    }
+    return undefined;
+  }
+
+  async getConnections(): Promise<GoogleGmailConnectionSummary[]> {
+    const summaries = new Map<string, GoogleGmailConnectionSummary>();
+    for (const credential of await this.readPersistedCredentials()) {
+      const connectionId = Reflect.get(credential, 'connectionId');
+      const emailAddress = Reflect.get(credential, 'emailAddress');
+      if (typeof connectionId !== 'string' || typeof emailAddress !== 'string') {
+        continue;
+      }
+      const expiresAt = Reflect.get(credential, 'expiresAt');
+      const scope = Reflect.get(credential, 'scope');
+      summaries.set(connectionId, {
+        connectionId,
+        emailAddress,
+        ...(typeof expiresAt === 'number' ? { expiresAt } : {}),
+        ...(typeof scope === 'string' ? { scope } : {}),
+      });
     }
 
-    if (
-      typeof credentialEmail !== 'string' ||
-      typeof connectionId !== 'string' ||
-      this.normalizeCredentialEmail(credentialEmail) !==
-        this.normalizeCredentialEmail(email)
-    ) {
-      return undefined;
+    for (const [connectionId, tokens] of this.connections) {
+      if (typeof tokens.emailAddress !== 'string') continue;
+      summaries.set(connectionId, {
+        connectionId,
+        emailAddress: tokens.emailAddress,
+        ...(typeof tokens.expiresAt === 'number'
+          ? { expiresAt: tokens.expiresAt }
+          : {}),
+        ...(typeof tokens.scope === 'string' ? { scope: tokens.scope } : {}),
+      });
     }
 
-    return connectionId;
+    return [...summaries.values()];
   }
 
   async hasCredentialEmail(email: string): Promise<boolean> {
-    let credentialEmail: unknown;
-    try {
-      const content = await readFile(
-        resolve(process.cwd(), 'credential.json'),
-        'utf8',
+    const normalizedEmail = this.normalizeCredentialEmail(email);
+    return (await this.readPersistedCredentials()).some((credential) => {
+      const credentialEmail = Reflect.get(credential, 'emailAddress');
+      return (
+        typeof credentialEmail === 'string' &&
+        this.normalizeCredentialEmail(credentialEmail) === normalizedEmail
       );
-      const parsed: unknown = JSON.parse(content);
-      const credential =
-        parsed && typeof parsed === 'object'
-          ? Reflect.get(parsed, 'credential')
-          : undefined;
-      credentialEmail =
-        credential && typeof credential === 'object'
-          ? Reflect.get(credential, 'emailAddress')
-          : undefined;
-    } catch {
-      return false;
-    }
-
-    return (
-      typeof credentialEmail === 'string' &&
-      this.normalizeCredentialEmail(credentialEmail) ===
-        this.normalizeCredentialEmail(email)
-    );
+    });
   }
 
   async getLatestOpenAiVerificationCode(
     connectionId: string,
     requestedAfterMs?: number,
   ): Promise<string> {
-    let accessToken: unknown;
-    try {
-      const content = await readFile(
-        resolve(process.cwd(), 'credential.json'),
-        'utf8',
-      );
-      const parsed: unknown = JSON.parse(content);
-      const credential =
-        parsed && typeof parsed === 'object'
-          ? Reflect.get(parsed, 'credential')
-          : undefined;
-      const persistedConnectionId =
-        credential && typeof credential === 'object'
-          ? Reflect.get(credential, 'connectionId')
-          : undefined;
-      accessToken =
-        credential && typeof credential === 'object'
-          ? Reflect.get(credential, 'accessToken')
-          : undefined;
-      if (persistedConnectionId !== connectionId) accessToken = undefined;
-    } catch {
-      accessToken = undefined;
-    }
-
+    const persistedCredential = (await this.readPersistedCredentials()).find(
+      (credential) =>
+        Reflect.get(credential, 'connectionId') === connectionId,
+    );
     const runtimeTokens = this.connections.get(connectionId);
-    if (typeof accessToken !== 'string') {
-      accessToken = runtimeTokens?.accessToken;
-    }
-    console.log('[gmail] verification lookup started', {
-      hasPersistedConnection: typeof accessToken === 'string',
-    });
+    let accessToken =
+      persistedCredential &&
+      typeof Reflect.get(persistedCredential, 'accessToken') === 'string'
+        ? (Reflect.get(persistedCredential, 'accessToken') as string)
+        : runtimeTokens?.accessToken;
+    const refreshToken =
+      persistedCredential &&
+      typeof Reflect.get(persistedCredential, 'refreshToken') === 'string'
+        ? (Reflect.get(persistedCredential, 'refreshToken') as string)
+        : runtimeTokens?.refreshToken;
     if (typeof accessToken !== 'string') {
       throw new UnauthorizedException('Invalid Gmail connection');
     }
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        return await this.lookupVerificationCode(
+          accessToken,
+          requestedAfterMs,
+        );
+      } catch (error) {
+        if (
+          attempt === 1 ||
+          !refreshToken ||
+          !(error instanceof UnauthorizedException) ||
+          error.message !== 'Gmail access token expired'
+        ) {
+          throw error;
+        }
+        const refreshed = await this.refreshAccessToken(refreshToken);
+        accessToken = refreshed.accessToken;
+        this.connections.set(connectionId, {
+          ...(runtimeTokens ?? {}),
+          ...(persistedCredential ?? {}),
+          accessToken: refreshed.accessToken,
+          refreshToken: refreshed.refreshToken ?? refreshToken,
+          expiresIn: refreshed.expiresIn,
+          expiresAt: refreshed.expiresAt,
+        });
+        await this.persistRefreshedCredential(
+          connectionId,
+          accessToken,
+          refreshed,
+          persistedCredential,
+        );
+      }
+    }
+
+    throw new UnauthorizedException('Gmail messages lookup failed');
+  }
+
+  private async lookupVerificationCode(
+    accessToken: string,
+    requestedAfterMs?: number,
+  ): Promise<string> {
     const query = new URLSearchParams({
       q: requestedAfterMs
         ? `from:noreply@tm.openai.com after:${Math.floor(requestedAfterMs / 1000)}`
@@ -260,30 +283,26 @@ export class GoogleGmailService {
       `https://gmail.googleapis.com/gmail/v1/users/me/messages?${query.toString()}`,
       { headers: { Authorization: `Bearer ${accessToken}` } },
     );
-    console.log('[gmail] message list response received', {
-      status: listResponse.status,
-      contentType: listResponse.headers.get('content-type'),
-    });
+    if (listResponse.status === 401) {
+      throw new UnauthorizedException('Gmail access token expired');
+    }
     if (!listResponse.ok) {
       throw new UnauthorizedException('Gmail messages lookup failed');
     }
 
     const messageIds = this.asMessageIds(await listResponse.json());
-    console.log('[gmail] messages found', { count: messageIds.length });
     if (messageIds.length === 0) {
       throw new NotFoundException('OpenAI verification email not found');
     }
 
     for (const messageId of messageIds) {
-      console.log('[gmail] loading message', { hasMessageId: Boolean(messageId) });
       const messageResponse = await fetch(
         `https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(messageId)}?format=full`,
         { headers: { Authorization: `Bearer ${accessToken}` } },
       );
-      console.log('[gmail] message response received', {
-        status: messageResponse.status,
-        contentType: messageResponse.headers.get('content-type'),
-      });
+      if (messageResponse.status === 401) {
+        throw new UnauthorizedException('Gmail access token expired');
+      }
       if (!messageResponse.ok) {
         throw new UnauthorizedException('Gmail message lookup failed');
       }
@@ -306,14 +325,83 @@ export class GoogleGmailService {
           /Enter this temporary verification code to continue:[\s\S]*?<p[^>]*>[\s\S]*?\b(\d{6})\b/i,
         )?.[1] ??
         body.match(/\bverification\s+code\b[\s\S]{0,100}?\b(\d{6})\b/i)?.[1];
-      if (code) {
-        console.log('[gmail] verification code found', { length: code.length });
-        return code;
-      }
+      if (code) return code;
     }
 
-    console.log('[gmail] verification code not found in messages');
     throw new NotFoundException('OpenAI verification code not found');
+  }
+
+  private async refreshAccessToken(
+    refreshToken: string,
+  ): Promise<GoogleGmailTokens> {
+    const response = await fetch(this.config.tokenUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: this.config.clientId,
+        client_secret: this.config.clientSecret,
+        refresh_token: refreshToken,
+        grant_type: 'refresh_token',
+      }),
+    });
+    if (!response.ok) {
+      throw new UnauthorizedException('Google OAuth token refresh failed');
+    }
+    const tokenResponse = this.asTokenResponse(await response.json());
+    return {
+      accessToken: tokenResponse.access_token,
+      refreshToken: tokenResponse.refresh_token,
+      expiresIn: tokenResponse.expires_in,
+      expiresAt: tokenResponse.expires_in
+        ? Date.now() + tokenResponse.expires_in * 1000
+        : undefined,
+      scope: tokenResponse.scope,
+      tokenType: tokenResponse.token_type,
+    };
+  }
+
+  private async persistRefreshedCredential(
+    connectionId: string,
+    accessToken: string,
+    refreshed: GoogleGmailTokens,
+    persistedCredential?: Record<string, unknown>,
+  ): Promise<void> {
+    const credentials = await this.readPersistedCredentials();
+    const nextCredentials = credentials.map((credential) =>
+      Reflect.get(credential, 'connectionId') === connectionId
+        ? {
+            ...credential,
+            accessToken,
+            ...(refreshed.refreshToken
+              ? { refreshToken: refreshed.refreshToken }
+              : {}),
+            expiresIn: refreshed.expiresIn,
+            expiresAt: refreshed.expiresAt,
+          }
+        : credential,
+    );
+    if (
+      persistedCredential &&
+      !nextCredentials.some(
+        (credential) =>
+          Reflect.get(credential, 'connectionId') === connectionId,
+      )
+    ) {
+      nextCredentials.push({
+        ...persistedCredential,
+        accessToken,
+        ...(refreshed.refreshToken
+          ? { refreshToken: refreshed.refreshToken }
+          : {}),
+        expiresIn: refreshed.expiresIn,
+        expiresAt: refreshed.expiresAt,
+      });
+    }
+    await writeFile(
+      resolve(process.cwd(), 'credential.json'),
+      JSON.stringify({ credentials: nextCredentials }, null, 2),
+      'utf8',
+    );
   }
 
   private asMessageIds(value: unknown): string[] {
@@ -355,6 +443,33 @@ export class GoogleGmailService {
     const payloadText = payload ? this.extractMessageText(payload) : '';
 
     return `${decoded}\n${nestedText}\n${payloadText}`;
+  }
+  private async readPersistedCredentials(): Promise<Record<string, unknown>[]> {
+    try {
+      const content = await readFile(
+        resolve(process.cwd(), 'credential.json'),
+        'utf8',
+      );
+      const parsed: unknown = JSON.parse(content);
+      if (Array.isArray(parsed)) {
+        return parsed.filter(
+          (value): value is Record<string, unknown> =>
+            typeof value === 'object' && value !== null,
+        );
+      }
+      if (!parsed || typeof parsed !== 'object') return [];
+      const credentials = Reflect.get(parsed, 'credentials');
+      if (Array.isArray(credentials)) {
+        return credentials.filter(
+          (value): value is Record<string, unknown> =>
+            typeof value === 'object' && value !== null,
+        );
+      }
+      const credential = Reflect.get(parsed, 'credential');
+      return credential && typeof credential === 'object' ? [credential] : [];
+    } catch {
+      return [];
+    }
   }
 
   getTokens(connectionId: string): GoogleGmailTokens | undefined {
