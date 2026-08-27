@@ -1,4 +1,10 @@
-import { BadRequestException, Body, Controller, Post } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Post,
+  Query,
+} from '@nestjs/common';
 
 import { ProtonMailService } from './proton-mail.service';
 
@@ -18,13 +24,32 @@ export class ProtonMailController {
   @Post('verification-code')
   getVerificationCode(
     @Body() body: { credential?: { connectionId?: string } },
+    @Query('time') time?: string,
   ) {
     const connectionId = body?.credential?.connectionId;
     if (!connectionId) {
       throw new BadRequestException('credential.connectionId is required');
     }
 
-    return this.protonMailService.getLatestOpenAiVerificationCode(connectionId);
+    if (time === undefined) {
+      return this.protonMailService.getLatestOpenAiVerificationCode(
+        connectionId,
+      );
+    }
+
+    if (time.trim() === '') {
+      throw new BadRequestException('time must be a Unix timestamp');
+    }
+
+    const requestedTime = Number(time);
+    if (!Number.isSafeInteger(requestedTime) || requestedTime < 0) {
+      throw new BadRequestException('time must be a Unix timestamp');
+    }
+
+    return this.protonMailService.getLatestOpenAiVerificationCode(
+      connectionId,
+      requestedTime,
+    );
   }
 
   @Post('login')

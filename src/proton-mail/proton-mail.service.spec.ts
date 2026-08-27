@@ -99,6 +99,42 @@ describe('ProtonMailService', () => {
     ).rejects.toBeInstanceOf(NotFoundException);
     expect(close).toHaveBeenCalled();
   });
+  it('filters matching conversations by their API Time field', async () => {
+    const service = new ProtonMailService(config);
+    const response = {
+      url: () => 'https://mail.proton.me/api/mail/v4/conversations',
+      text: jest.fn().mockResolvedValue(
+        JSON.stringify({
+          Conversations: [
+            {
+              ID: 'older',
+              Time: 1_700_000_000,
+              Subject: 'Your temporary ChatGPT login code',
+              Senders: [{ Address: 'noreply@tm.openai.com' }],
+            },
+            {
+              ID: 'newer',
+              Time: 1_700_000_001,
+              Subject: 'Your temporary ChatGPT login code',
+              Senders: [{ Address: 'noreply@tm.openai.com' }],
+            },
+          ],
+        }),
+      ),
+    };
+    const page = {
+      on: jest.fn((_event: string, listener: (value: typeof response) => void) =>
+        listener(response),
+      ),
+      off: jest.fn(),
+    };
+
+    await expect(
+      service['captureConversationsResponse'](page as never, 1_700_000_001),
+    ).resolves.toEqual([
+      expect.objectContaining({ ID: 'newer', Time: 1_700_000_001 }),
+    ]);
+  });
 
   it('keeps the manual login browser open until explicit completion', async () => {
     const { browser, page, close } = createBrowser();

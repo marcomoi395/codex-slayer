@@ -39,7 +39,31 @@ describe('ProtonMailController', () => {
     );
   });
 
-  it('delegates verification code lookup', async () => {
+  it('passes the optional conversation time query to verification lookup', async () => {
+    getLatestOpenAiVerificationCode.mockResolvedValue('123456');
+
+    await expect(
+      controller.getVerificationCode(
+        { credential: { connectionId: 'proton:user@example.com' } },
+        '1700000000',
+      ),
+    ).resolves.toBe('123456');
+    expect(getLatestOpenAiVerificationCode).toHaveBeenCalledWith(
+      'proton:user@example.com',
+      1700000000,
+    );
+  });
+
+  it('rejects a non-numeric conversation time query', () => {
+    expect(() =>
+      controller.getVerificationCode(
+        { credential: { connectionId: 'proton:user@example.com' } },
+        'not-a-timestamp',
+      ),
+    ).toThrow(new BadRequestException('time must be a Unix timestamp'));
+  });
+
+  it('delegates verification code lookup without a time filter', async () => {
     getLatestOpenAiVerificationCode.mockResolvedValue('123456');
 
     await expect(
@@ -47,6 +71,9 @@ describe('ProtonMailController', () => {
         credential: { connectionId: 'proton:user@example.com' },
       }),
     ).resolves.toBe('123456');
+    expect(getLatestOpenAiVerificationCode).toHaveBeenCalledWith(
+      'proton:user@example.com',
+    );
   });
 
   it('starts manual Proton login', () => {

@@ -111,7 +111,10 @@ export class ProtonMailService {
   ): Promise<ProtonMailPage> {
     return browser.pages?.()[0] ?? (await browser.newPage());
   }
-  async getLatestOpenAiVerificationCode(connectionId: string): Promise<string> {
+  async getLatestOpenAiVerificationCode(
+    connectionId: string,
+    requestedTime?: number,
+  ): Promise<string> {
     if (connectionId !== this.connectionId) {
       throw new UnauthorizedException('Invalid Proton Mail connection');
     }
@@ -121,7 +124,10 @@ export class ProtonMailService {
       this.verificationBrowser = await this.launchBrowser();
       stage = 'page_selection';
       const page = await this.getBrowserPage(this.verificationBrowser);
-      const conversationsPromise = this.captureConversationsResponse(page);
+      const conversationsPromise = this.captureConversationsResponse(
+        page,
+        requestedTime,
+      );
 
       stage = 'homepage_navigation';
       await page.goto(this.config.url);
@@ -200,6 +206,7 @@ export class ProtonMailService {
 
   private captureConversationsResponse(
     page: ProtonMailPage,
+    requestedTime?: number,
   ): Promise<ProtonMailConversation[]> {
     if (!page.on) {
       throw new ServiceUnavailableException(
@@ -252,8 +259,12 @@ export class ProtonMailService {
                 const subjectMatched = conversation.Subject?.trim()
                   .toLowerCase()
                   .startsWith('your temporary chatgpt');
+                const timeMatched =
+                  requestedTime === undefined ||
+                  (typeof conversation.Time === 'number' &&
+                    conversation.Time >= requestedTime);
 
-                return senderMatched && subjectMatched;
+                return senderMatched && subjectMatched && timeMatched;
               },
             );
 
