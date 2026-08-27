@@ -12,7 +12,6 @@ export class CodexController {
     return this.codexService.createAuthorizationLink();
   }
 
-
   @Get('status')
   getStatus() {
     return this.codexService.getStatus();

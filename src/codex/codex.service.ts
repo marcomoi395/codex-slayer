@@ -526,16 +526,12 @@ export class CodexService implements OnModuleDestroy {
       timeout,
       url: this.getPageUrl(page),
     });
-    try {
-      await locator.waitFor({ state: 'visible', timeout });
-      console.log('[codex] browser element visible', {
-        step,
-        elapsedMs: Date.now() - startedAt,
-        url: this.getPageUrl(page),
-      });
-    } catch (error) {
-      throw error;
-    }
+    await locator.waitFor({ state: 'visible', timeout });
+    console.log('[codex] browser element visible', {
+      step,
+      elapsedMs: Date.now() - startedAt,
+      url: this.getPageUrl(page),
+    });
   }
   private getCodexBrowserRoute(page: Page): CodexBrowserRoute | undefined {
     const pathname = new URL(this.getPageUrl(page) ?? 'https://invalid').pathname;

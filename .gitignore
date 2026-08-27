@@ -19,3 +19,4 @@ node_modules/
 credential.json
 codex-accounts.json
 .DS_Store
+/data/proton-profile/
