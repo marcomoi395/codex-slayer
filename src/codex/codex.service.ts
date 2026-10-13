@@ -400,11 +400,19 @@ export class CodexService implements OnModuleDestroy {
       this.browser = await this.launchBrowser();
       const context = await this.browser.newContext();
       page = await context.newPage();
+    } catch {
+      await this.closeBrowser();
+      throw new ServiceUnavailableException(
+        'Camoufox could not launch. Check the browser files and Linux runtime libraries.',
+      );
+    }
+
+    try {
       await page.goto(authorizationUrl, { waitUntil: 'domcontentloaded' });
     } catch {
       await this.closeBrowser();
       throw new ServiceUnavailableException(
-        'Unable to start browser. Install the selected browser runtime first.',
+        'Camoufox started but could not open the Codex login page. Check outbound network access.',
       );
     }
 
