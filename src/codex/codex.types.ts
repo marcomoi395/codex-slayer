@@ -24,18 +24,23 @@ export interface CodexConnection {
   tokenType?: string;
 }
 
-export interface CodexStartResponse extends CodexAuthorization {
-  callbackUrl: string;
-  browserUrl: string;
+export interface CodexCallbackResponse {
+  ok: true;
+  email?: string;
+  connectionId?: string;
 }
 
 export interface CodexAccountRequest {
   email: string;
   password: string;
+  totpSecret?: string;
 }
+
 export interface CodexAccountSummary {
   email: string;
   connectionId?: string;
+  createdAt?: number;
+  updatedAt?: number;
 }
 
 export interface CodexStatusLog {

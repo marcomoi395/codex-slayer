@@ -7,19 +7,19 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { readFile, writeFile } from 'node:fs/promises';
-import { setTimeout as delay } from 'node:timers/promises';
+import { authenticator } from 'otplib';
 import { createServer, type Server } from 'node:http';
 import type { Browser, Locator, Page } from 'playwright-core';
 
+import { AccountVault } from './account-vault';
 import { CODEX_CONFIG } from './codex.constants';
 import type { CodexConfig } from './codex.config';
 import type {
   CodexAccountRequest,
   CodexAccountSummary,
   CodexAuthorization,
+  CodexCallbackResponse,
   CodexConnection,
-  CodexStartResponse,
   CodexStatus,
   CodexTokenResponse,
 } from './codex.types';
@@ -28,32 +28,37 @@ interface PendingAuthorization extends CodexAuthorization {
   codeVerifier: string;
   redirectUri: string;
   email?: string;
+  password?: string;
+  totpSecret?: string;
 }
-interface ResolvedAccountCredentials extends CodexAccountRequest {}
-interface StoredCodexAccount {
-  connectionId?: string;
-  accessToken: string;
-  refreshToken: string;
-  idToken: string;
-  email: string;
-}
-type CodexBrowserRoute =
-  | 'email-entry'
+
+type BrowserRoute =
+  | 'email'
   | 'password'
+  | 'totp'
+  | 'consent'
   | 'email-verification'
-  | 'add-phone'
-  | 'about-you'
-  | 'consent';
+  | 'phone-verification'
+  | 'captcha'
+  | 'onboarding'
+  | 'unsupported';
+
+const MANUAL_STEP_MESSAGE =
+  'Codex requires a manual security step (CAPTCHA or email/phone verification). Complete it manually, then retry.';
 
 @Injectable()
 export class CodexService implements OnModuleDestroy {
   private readonly pending = new Map<string, PendingAuthorization>();
-  private readonly connectionsFile: string;
+  private readonly accountVault: AccountVault;
   private status: CodexStatus = { active: false, logs: [] };
   private browser?: Browser;
   private callbackServer?: Server;
+
   constructor(@Inject(CODEX_CONFIG) private readonly config: CodexConfig) {
-    this.connectionsFile = config.accountsFile;
+    this.accountVault = new AccountVault(
+      config.databasePath ?? 'codex-accounts.sqlite',
+      config.encryptionKey,
+    );
   }
 
   getStatus(): CodexStatus {
@@ -63,70 +68,67 @@ export class CodexService implements OnModuleDestroy {
     };
   }
 
-  async getAccounts(): Promise<CodexAccountSummary[]> {
-    const accounts = await this.loadConnections();
-    return accounts.map(({ email, connectionId }) => ({ email, connectionId }));
+  getAccounts(): Promise<CodexAccountSummary[]> {
+    return this.accountVault.list();
   }
 
-  private updateStatus(
-    state: string,
-    options: {
-      active?: boolean;
-      email?: string;
-      step?: string;
-      level?: string;
-      message?: string;
-    } = {},
-  ): void {
-    const { active = this.status.active, email, step, level, message } = options;
-    this.status = {
-      active,
-      state,
-      ...(email !== undefined ? { email } : this.status.email ? { email: this.status.email } : {}),
-      ...(step !== undefined ? { step } : this.status.step ? { step: this.status.step } : {}),
-      logs: message
-        ? [...this.status.logs, { at: Date.now(), message, ...(level ? { level } : {}) }].slice(-20)
-        : this.status.logs,
-    };
+  async deleteAccount(connectionId: string): Promise<void> {
+    if (!connectionId || !(await this.accountVault.delete(connectionId))) {
+      throw new BadRequestException('Codex account was not found');
+    }
   }
 
   async startAccountFlow(
     credentials: CodexAccountRequest,
-  ): Promise<CodexStartResponse> {
-    let authorization: CodexStartResponse | undefined;
+  ): Promise<{ started: true }> {
+    this.validateAccountCredentials(credentials);
+    if (this.pending.size > 0 || this.status.active) {
+      throw new BadRequestException('A Codex login flow is already active');
+    }
+
+    let authorization: CodexAuthorization | undefined;
     try {
       this.updateStatus('validating', {
         active: true,
-        email: typeof credentials?.email === 'string' ? credentials.email : undefined,
+        email: credentials.email.trim().toLowerCase(),
         step: 'credentials',
         message: 'Validating Codex account credentials',
       });
-      this.validateAccountCredentials(credentials);
       authorization = await this.createAuthorizationLink(credentials.email);
-      this.updateStatus('browser', {
-        step: 'authorization',
-        message: 'Opening Codex authorization flow',
-      });
+
+      const pending = this.pending.get(authorization.state);
+      if (!pending) throw new Error('Authorization state was not created');
+      pending.password = credentials.password;
+      pending.totpSecret = credentials.totpSecret;
+
       await this.openBrowser(authorization.authorizationUrl, credentials);
       this.updateStatus('awaiting_callback', {
         step: 'callback',
         message: 'Waiting for Codex authorization callback',
       });
-      return authorization;
+      return { started: true };
     } catch (error) {
       if (authorization) this.pending.delete(authorization.state);
+      await this.closeBrowser();
+      this.closeCallbackServer();
       this.updateStatus('failed', {
         active: false,
         step: 'start',
         level: 'error',
-        message: 'Codex account flow failed to start',
+        message: this.safeFailureMessage(error),
       });
       throw error;
     }
   }
 
-  async createAuthorizationLink(email?: string): Promise<CodexStartResponse> {
-    if (this.pending.size > 0) {
+  private async createAuthorizationLink(
+    email?: string,
+  ): Promise<CodexAuthorization> {
+    if (
+      this.pending.size > 0 ||
+      this.callbackServer ||
+      (this.status.active && this.status.state !== 'validating')
+    ) {
       throw new BadRequestException(
         'A Codex authorization flow is already active',
       );
@@ -137,6 +139,14 @@ export class CodexService implements OnModuleDestroy {
     const codeChallenge = createHash('sha256')
       .update(codeVerifier)
       .digest('base64url');
+    try {
+      await this.startCallbackServer();
+    } catch {
+      this.closeCallbackServer();
+      throw new ServiceUnavailableException(
+        'Unable to start the OAuth callback server',
+      );
+    }
     const redirectUri = this.getRedirectUri();
     const createdAt = Date.now();
     const authorizationUrl = this.buildAuthorizationUrl(
@@ -151,63 +161,45 @@ export class CodexService implements OnModuleDestroy {
       createdAt,
       codeVerifier,
       redirectUri,
-      email,
+      email: email?.trim().toLowerCase(),
     });
-    await this.startCallbackServer();
 
     this.updateStatus('authorization_created', {
-      email,
+      active: true,
+      email: email?.trim().toLowerCase(),
       step: 'authorization',
-      message: 'Codex authorization link created',
+      message: 'Codex authorization flow created',
     });
-    return {
-      state,
-      authorizationUrl,
-      createdAt,
-      callbackUrl: redirectUri,
-      browserUrl: this.config.createAccountUrl,
-    };
+    return { state, authorizationUrl, createdAt };
   }
 
   async handleCallback(
     code?: string,
     state?: string,
     error?: string,
-  ): Promise<CodexConnection> {
+  ): Promise<CodexCallbackResponse> {
     if (error) {
-      this.updateStatus('failed', {
-        active: false,
-        step: 'callback',
-        level: 'error',
-        message: 'Codex authorization callback failed',
-      });
-      throw new UnauthorizedException(`Codex OAuth failed: ${error}`);
+      if (state) this.pending.delete(state);
+      await this.failCallback('Codex authorization was denied');
+      throw new UnauthorizedException('Codex authorization failed');
     }
     if (!code || !state) {
-      this.updateStatus('failed', {
-        active: false,
-        step: 'callback',
-        level: 'error',
-        message: 'Codex authorization callback was incomplete',
-      });
+      if (state) this.pending.delete(state);
+      await this.failCallback('Codex authorization callback was incomplete');
       throw new BadRequestException('Codex callback requires code and state');
     }
 
     const session = this.pending.get(state);
     if (!session || Date.now() - session.createdAt > this.config.stateTtlMs) {
-      this.pending.delete(state);
-      this.updateStatus('failed', {
-        active: false,
-        step: 'callback',
-        level: 'error',
-        message: 'Codex authorization state was invalid or expired',
-      });
+      if (session) this.pending.delete(state);
+      await this.failCallback(
+        'Codex authorization state was invalid or expired',
+      );
       throw new UnauthorizedException(
         'Codex OAuth state is invalid or expired',
       );
     }
 
-    let completed = false;
     try {
       this.updateStatus('exchanging_token', {
         email: session.email,
@@ -228,10 +220,8 @@ export class CodexService implements OnModuleDestroy {
           code_verifier: session.codeVerifier,
         }),
       });
-
-      if (!response.ok) {
+      if (!response.ok)
         throw new UnauthorizedException('Codex token exchange failed');
-      }
 
       const token = await this.parseTokenResponse(response);
       const connection: CodexConnection = {
@@ -246,19 +236,28 @@ export class CodexService implements OnModuleDestroy {
         scope: token.scope,
         tokenType: token.token_type,
       };
-      if (session.email) {
-        await this.saveConnection(connection, session.email);
+      if (session.email && session.password !== undefined) {
+        await this.saveConnection(connection, session);
       }
+      const account = session.email
+        ? (await this.accountVault.list()).find(
+            (item) => item.email === session.email,
+          )
+        : undefined;
       this.pending.delete(state);
-      completed = true;
       this.updateStatus('completed', {
         active: false,
         email: session.email,
         step: 'callback',
         message: 'Codex account authorization completed',
       });
-      return connection;
+      return {
+        ok: true,
+        email: session.email,
+        connectionId: account?.connectionId,
+      };
     } catch (callbackError) {
+      this.pending.delete(state);
       this.updateStatus('failed', {
         active: false,
         email: session.email,
@@ -269,58 +268,61 @@ export class CodexService implements OnModuleDestroy {
       throw callbackError;
     } finally {
       await this.closeBrowser();
-      if (completed) await this.closeCallbackServer();
-    }
-  }
-
-  private async saveConnection(
-    connection: CodexConnection,
-    email: string,
-  ): Promise<void> {
-    const connections = await this.loadConnections();
-    connections.push({
-      connectionId: connection.connectionId,
-      accessToken: connection.accessToken,
-      refreshToken: connection.refreshToken ?? '',
-      idToken: connection.idToken ?? '',
-      email,
-    });
-    await writeFile(
-      this.connectionsFile,
-      JSON.stringify(connections, null, 2),
-      'utf8',
-    );
-  }
-
-  private async loadConnections(): Promise<StoredCodexAccount[]> {
-    try {
-      const content = await readFile(this.connectionsFile, 'utf8');
-      const value: unknown = JSON.parse(content);
-      if (!Array.isArray(value)) return [];
-      return value as StoredCodexAccount[];
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
-      throw error;
     }
   }
 
   async onModuleDestroy(): Promise<void> {
     await this.closeBrowser();
-    await this.closeCallbackServer();
+    this.closeCallbackServer();
+    this.pending.clear();
+    this.accountVault.close();
+  }
+
+  private async saveConnection(
+    connection: CodexConnection,
+    session: PendingAuthorization,
+  ): Promise<void> {
+    await this.accountVault.upsert({
+      connectionId: connection.connectionId,
+      email: session.email!,
+      password: session.password!,
+      totpSecret: session.totpSecret,
+      accessToken: connection.accessToken,
+      refreshToken: connection.refreshToken,
+      idToken: connection.idToken,
+      expiresAt: connection.expiresAt,
+      scope: connection.scope,
+      tokenType: connection.tokenType,
+    });
+    session.password = undefined;
+    session.totpSecret = undefined;
   }
 
   private validateAccountCredentials(credentials: CodexAccountRequest): void {
     if (
       !credentials ||
       typeof credentials.email !== 'string' ||
-      !credentials.email.trim() ||
+      !/^\S+@\S+\.\S+$/.test(credentials.email.trim()) ||
       typeof credentials.password !== 'string' ||
-      !credentials.password
+      !credentials.password ||
+      typeof credentials.totpSecret !== 'string' ||
+      !credentials.totpSecret.trim()
     ) {
-      throw new BadRequestException('Email and password are required');
+      throw new BadRequestException(
+        'Email, password and TOTP secret are required',
+      );
+    }
+    const normalizedTotp = credentials.totpSecret
+      .replace(/[\s-]/g, '')
+      .toUpperCase();
+    const unpaddedLength = normalizedTotp.replace(/=+$/, '').length;
+    if (
+      !/^[A-Z2-7]+=*$/.test(normalizedTotp) ||
+      [1, 3, 6].includes(unpaddedLength % 8)
+    ) {
+      throw new BadRequestException('TOTP secret is invalid');
     }
   }
-
 
   private buildAuthorizationUrl(
     redirectUri: string,
@@ -346,278 +348,315 @@ export class CodexService implements OnModuleDestroy {
   }
 
   private getRedirectUri(): string {
-    return `http://${this.config.callbackHost}:${this.config.callbackPort}${this.config.callbackPath}`;
+    const address = this.callbackServer?.address();
+    const port =
+      address && typeof address === 'object'
+        ? address.port
+        : this.config.callbackPort;
+    return `http://${this.config.callbackHost}:${port}${this.config.callbackPath}`;
   }
 
   private async startCallbackServer(): Promise<void> {
     if (this.callbackServer) return;
-
     this.callbackServer = createServer((request, response) => {
       const url = new URL(request.url ?? '/', this.getRedirectUri());
       if (url.pathname !== this.config.callbackPath) {
         response.writeHead(404).end();
         return;
       }
-
       void this.handleCallback(
         url.searchParams.get('code') ?? undefined,
         url.searchParams.get('state') ?? undefined,
         url.searchParams.get('error') ?? undefined,
       )
         .then(() =>
-          response
-            .writeHead(200)
-            .end('Codex authorization complete. You may close this tab.'),
+          response.writeHead(200).end('Codex authorization complete.'),
         )
-        .catch(() =>
-          response.writeHead(400).end('Codex authorization failed.'),
-        );
+        .catch(() => response.writeHead(400).end('Codex authorization failed.'))
+        .finally(() => this.closeCallbackServer());
     });
     await new Promise<void>((resolve, reject) => {
-      this.callbackServer?.once('error', reject);
-      this.callbackServer?.listen(
-        this.config.callbackPort,
-        this.config.callbackHost,
-        () => resolve(),
-      );
+      const server = this.callbackServer!;
+      const onError = (error: Error) => {
+        server.off('listening', onListening);
+        reject(error);
+      };
+      const onListening = () => {
+        server.off('error', onError);
+        resolve();
+      };
+      server.once('error', onError);
+      server.once('listening', onListening);
+      server.listen(this.config.callbackPort, this.config.callbackHost);
     });
   }
 
-
   private async openBrowser(
     authorizationUrl: string,
-    credentials: ResolvedAccountCredentials,
+    credentials: CodexAccountRequest,
   ): Promise<void> {
-    console.log('[codex] browser flow started', {
-      authorizationHost: new URL(authorizationUrl).host,
-      hasEmail: Boolean(credentials.email),
-    });
     let page: Page;
     try {
       this.browser = await this.launchBrowser();
       const context = await this.browser.newContext();
       page = await context.newPage();
-      await page.goto(authorizationUrl, { waitUntil: 'domcontentloaded' });
     } catch {
       await this.closeBrowser();
-      await this.closeCallbackServer();
       throw new ServiceUnavailableException(
-        'Unable to start browser. Install the selected browser runtime first.',
+        'Camoufox could not launch. Check the browser files and Linux runtime libraries.',
       );
     }
 
     try {
-    this.updateStatus('browser_started', {
-      step: 'browser',
-      message: 'Codex browser flow started',
-    });
-      const signUpLink = page.getByRole('link', { name: /sign up/i });
-      const initialRoute = this.getCodexBrowserRoute(page);
-      if (await this.isVisible(signUpLink, 3_000)) {
-        console.log('[codex] signup link visible');
-        const emailInput = page.locator('input[type="email"]');
-        await signUpLink.click();
-        await this.waitForVisible(page, emailInput, 10_000, 'email input');
-        await emailInput.fill(credentials.email);
+      await page.goto(authorizationUrl, { waitUntil: 'domcontentloaded' });
+    } catch {
+      await this.closeBrowser();
+      throw new ServiceUnavailableException(
+        'Camoufox started but could not open the Codex login page. Check outbound network access.',
+      );
+    }
 
-        const continueButton = page.locator('button[type="submit"]');
-        await this.waitForVisible(page, continueButton, 10_000, 'signup continue button');
-        const emailEntryRoute = this.getCodexBrowserRoute(page) ?? 'email-entry';
-        await continueButton.click();
-        console.log('[codex] signup email submitted', {
-          url: this.getPageUrl(page),
-        });
-        const nextRoute = await this.waitForRouteChange(
-          page,
-          emailEntryRoute,
-        );
-        if (nextRoute !== 'password') {
-          await this.dispatchCurrentBrowserRoute(page, credentials);
-          return;
-        }
-
-        const passwordInput = page.locator('input[type="password"]');
-        await this.waitForVisible(page, passwordInput, 10_000, 'password input');
-        await passwordInput.fill(credentials.password);
-        const verificationRequestedAt = Date.now();
-        const passwordRoute = this.getCodexBrowserRoute(page) ?? 'password';
-        await continueButton.click();
-        console.log('[codex] signup password submitted', {
-          url: this.getPageUrl(page),
-        });
-        await this.dispatchCurrentBrowserRoute(
-          page,
-          credentials,
-          verificationRequestedAt,
-          passwordRoute,
-        );
-        return;
-      }
-
-      if (initialRoute) {
-        if (initialRoute === 'password') {
-          const passwordInput = page.locator('input[type="password"]');
-          await this.waitForVisible(page, passwordInput, 10_000, 'password input');
-          await passwordInput.fill(credentials.password);
-          const passwordRoute = this.getCodexBrowserRoute(page) ?? 'password';
-          await page.locator('button[type="submit"]').click();
-          await this.dispatchCurrentBrowserRoute(page, credentials, Date.now(), passwordRoute);
-          return;
-        }
-        await this.dispatchCurrentBrowserRoute(page, credentials);
-      }
+    try {
+      this.updateStatus('browser_started', {
+        step: 'email',
+        message: 'Codex browser flow started',
+      });
+      await this.fillAndSubmitEmail(page, credentials.email);
+      await this.fillAndSubmitPassword(page, credentials.password);
+      await this.fillAndSubmitTotp(page, credentials.totpSecret!);
+      await this.continueConsentIfPresent(page);
     } catch (error) {
       await this.closeBrowser();
-      await this.closeCallbackServer();
       throw error;
     }
   }
 
-  private getPageUrl(page: Page): string | undefined {
-    if (typeof page.url !== 'function') return undefined;
-    try {
-      const url = new URL(page.url());
-      return `${url.origin}${url.pathname}`;
-    } catch {
-      return page.url();
-    }
+  private async fillAndSubmitEmail(page: Page, email: string): Promise<void> {
+    this.ensureSafeRoute(page);
+    const field = await this.findVisible(page, [
+      page.getByLabel(/email(?: address)?/i),
+      page.getByRole('textbox', { name: /email(?: address)?/i }),
+    ]);
+    await field.fill(email);
+    this.updateStatus('email', {
+      step: 'email',
+      message: 'Submitting Codex email',
+    });
+    await this.continueButton(page).click();
   }
 
-
-
-
-
-  private async waitForVisible(
+  private async fillAndSubmitPassword(
     page: Page,
-    locator: Locator,
-    timeout: number,
-    step: string,
+    password: string,
   ): Promise<void> {
-    const startedAt = Date.now();
-    console.log('[codex] waiting for browser element', {
-      step,
-      timeout,
-      url: this.getPageUrl(page),
+    await this.waitForSafeRoute(page);
+    const field = await this.findVisible(page, [
+      page.getByLabel(/password/i),
+      page.getByRole('textbox', { name: /password/i }),
+    ]);
+    await field.fill(password);
+    this.updateStatus('password', {
+      step: 'password',
+      message: 'Submitting Codex password',
     });
-    await locator.waitFor({ state: 'visible', timeout });
-    console.log('[codex] browser element visible', {
-      step,
-      elapsedMs: Date.now() - startedAt,
-      url: this.getPageUrl(page),
-    });
-  }
-  private getCodexBrowserRoute(page: Page): CodexBrowserRoute | undefined {
-    const pathname = new URL(this.getPageUrl(page) ?? 'https://invalid').pathname;
-    if (/\/email-verification(?:[/?#]|$)/i.test(pathname)) return 'email-verification';
-    if (/\/add-phone(?:[/?#]|$)/i.test(pathname)) return 'add-phone';
-    if (/\/about-you(?:[/?#]|$)/i.test(pathname)) return 'about-you';
-    if (/\/sign-in-with-chatgpt\/codex\/consent(?:[/?#]|$)/i.test(pathname)) return 'consent';
-    if (/\/password(?:[/?#]|$)/i.test(pathname)) return 'password';
-    if (/\/create-account(?:[/?#]|$)/i.test(pathname)) return 'email-entry';
-    return undefined;
+    await this.continueButton(page).click();
   }
 
-  private async waitForCodexBrowserRoute(
-    page: Page,
-    timeout = 10_000,
-  ): Promise<CodexBrowserRoute> {
-    const startedAt = Date.now();
-    while (Date.now() - startedAt < timeout) {
-      const route = this.getCodexBrowserRoute(page);
-      if (route) return route;
-      await delay(250);
+  private async fillAndSubmitTotp(page: Page, secret: string): Promise<void> {
+    await this.waitForSafeRoute(page);
+    const field = await this.findVisible(page, [
+      page.getByLabel(/one[- ]time|verification|authenticator|security code/i),
+      page.getByRole('textbox', {
+        name: /one[- ]time|verification|authenticator|security code/i,
+      }),
+    ]);
+    const code = authenticator.generate(
+      secret.replace(/[\s-]/g, '').toUpperCase(),
+    );
+    await field.fill(code);
+    this.updateStatus('totp', {
+      step: 'totp',
+      message: 'Submitting one-time code',
+    });
+    await this.continueButton(page).click();
+  }
+
+  private async continueConsentIfPresent(page: Page): Promise<void> {
+    await this.waitForSafeRoute(page);
+    const consent = page.getByRole('button', { name: 'Continue', exact: true });
+    try {
+      await consent.waitFor({ state: 'visible', timeout: 3_000 });
+      this.updateStatus('consent', {
+        step: 'consent',
+        message: 'Confirming Codex consent',
+      });
+      await consent.click();
+    } catch {
+      // Consent is optional. Callback navigation may already be in progress.
     }
+  }
+
+  private continueButton(page: Page): Locator {
+    return page.getByRole('button', { name: 'Continue', exact: true });
+  }
+
+  private async findVisible(page: Page, locators: Locator[]): Promise<Locator> {
+    for (const locator of locators) {
+      try {
+        await locator.waitFor({ state: 'visible', timeout: 10_000 });
+        return locator;
+      } catch {
+        // Try the next semantic label, never a generated selector.
+      }
+    }
+    this.ensureSafeRoute(page);
     throw new ServiceUnavailableException(
-      'Codex browser route was not detected from the URL',
+      'Codex login page changed; manual completion is required',
     );
   }
-  private async waitForRouteChange(
-    page: Page,
-    previousRoute: CodexBrowserRoute,
-    timeout = 30_000,
-  ): Promise<CodexBrowserRoute | undefined> {
-    const startedAt = Date.now();
-    while (Date.now() - startedAt < timeout) {
-      const currentUrl = this.getPageUrl(page);
-      const route = this.getCodexBrowserRoute(page);
-      if (route && route !== previousRoute) return route;
-      if (currentUrl && !route) return undefined;
-      await delay(250);
+
+  private async waitForSafeRoute(page: Page): Promise<void> {
+    const started = Date.now();
+    while (Date.now() - started < 15_000) {
+      const route = this.getBrowserRoute(page);
+      if (
+        route === 'captcha' ||
+        route === 'email-verification' ||
+        route === 'phone-verification'
+      ) {
+        throw new ServiceUnavailableException(MANUAL_STEP_MESSAGE);
+      }
+      if (route === 'onboarding' || route === 'unsupported') {
+        throw new ServiceUnavailableException(
+          'Codex login route changed; manual completion is required',
+        );
+      }
+      if (
+        route === 'password' ||
+        route === 'totp' ||
+        route === 'consent' ||
+        route === 'email'
+      )
+        return;
+      await new Promise((resolve) => setTimeout(resolve, 100));
     }
-    throw new ServiceUnavailableException(
-      `Codex browser route did not change from ${previousRoute}`,
-    );
+    this.ensureSafeRoute(page);
   }
 
-  private async dispatchCurrentBrowserRoute(
-    page: Page,
-    credentials: ResolvedAccountCredentials,
-    requestedAfterMs = Date.now(),
-    previousRoute?: CodexBrowserRoute,
-  ): Promise<void> {
-    const currentRoute = this.getCodexBrowserRoute(page);
-    const route = previousRoute
-      ? currentRoute && currentRoute !== previousRoute
-        ? currentRoute
-        : await this.waitForRouteChange(page, previousRoute)
-      : currentRoute ?? (await this.waitForCodexBrowserRoute(page));
-    if (!route) return;
-    console.log('[codex] browser route dispatched', {
-      route,
-      url: this.getPageUrl(page),
-    });
-    if (route === 'email-verification' || route === 'add-phone') {
-      throw new ServiceUnavailableException(
-        'Codex email and phone verification require manual completion',
-      );
+  private ensureSafeRoute(page: Page): void {
+    const route = this.getBrowserRoute(page);
+    if (
+      route === 'captcha' ||
+      route === 'email-verification' ||
+      route === 'phone-verification'
+    ) {
+      throw new ServiceUnavailableException(MANUAL_STEP_MESSAGE);
     }
-    if (route === 'about-you') {
+    if (route === 'onboarding' || route === 'unsupported') {
       throw new ServiceUnavailableException(
-        'Codex profile completion requires manual completion',
+        'Codex login route changed; manual completion is required',
       );
-    }
-    if (route === 'consent') {
-      const continueButton = page.getByRole('button', {
-        name: 'Continue',
-        exact: true,
-      });
-      await continueButton.waitFor({ state: 'visible', timeout: 10_000 });
-      await continueButton.click();
-      console.log('[codex] consent Continue clicked', {
-        url: this.getPageUrl(page),
-      });
     }
   }
 
-
-  private async isVisible(locator: Locator, timeout: number): Promise<boolean> {
+  private getBrowserRoute(page: Page): BrowserRoute {
+    let pathname = '';
     try {
-      await locator.waitFor({ state: 'visible', timeout });
-      return true;
+      pathname = new URL(page.url()).pathname.toLowerCase();
     } catch {
-      return false;
+      return 'unsupported';
     }
+    if (/captcha/.test(pathname)) return 'captcha';
+    if (/email[-_/]verification|verify[-_/]email/.test(pathname))
+      return 'email-verification';
+    if (/phone|add[-_/]phone/.test(pathname)) return 'phone-verification';
+    if (/about[-_/]you|onboard|profile/.test(pathname)) return 'onboarding';
+    if (/password/.test(pathname)) return 'password';
+    if (/totp|mfa|otp|one[-_/]time|verification/.test(pathname)) return 'totp';
+    if (/consent/.test(pathname)) return 'consent';
+    if (
+      /create[-_/]account|sign[-_/]in|log[-_/]in|authorize|identifier/.test(
+        pathname,
+      )
+    )
+      return 'email';
+    if (/callback/.test(pathname)) return 'consent';
+    return 'unsupported';
+  }
+
+  private updateStatus(
+    state: string,
+    options: {
+      active?: boolean;
+      email?: string;
+      step?: string;
+      level?: string;
+      message?: string;
+    } = {},
+  ): void {
+    const {
+      active = this.status.active,
+      email,
+      step,
+      level,
+      message,
+    } = options;
+    this.status = {
+      active,
+      state,
+      ...(email !== undefined
+        ? { email }
+        : this.status.email
+          ? { email: this.status.email }
+          : {}),
+      ...(step !== undefined
+        ? { step }
+        : this.status.step
+          ? { step: this.status.step }
+          : {}),
+      logs: message
+        ? [
+            ...this.status.logs,
+            { at: Date.now(), message, ...(level ? { level } : {}) },
+          ].slice(-20)
+        : this.status.logs,
+    };
+  }
+
+  private async failCallback(message: string): Promise<void> {
+    this.pending.clear();
+    this.updateStatus('failed', {
+      active: false,
+      step: 'callback',
+      level: 'error',
+      message,
+    });
+    await this.closeBrowser();
+    this.closeCallbackServer();
+  }
+
+  private safeFailureMessage(error: unknown): string {
+    if (error instanceof ServiceUnavailableException) return error.message;
+    if (error instanceof BadRequestException) return error.message;
+    return 'Codex account flow failed to start';
   }
 
   private async launchBrowser(): Promise<Browser> {
-    // Camoufox is ESM-only; dynamic loading keeps the CommonJS Jest runtime compatible.
+    // camoufox-js is ESM-only; static import breaks the CommonJS Jest runtime.
     const { Camoufox } = await import('camoufox-js');
-    return Camoufox({
-      headless: false,
-      humanize: 0.5,
-    });
+    return Camoufox({ headless: true });
   }
 
   private async closeBrowser(): Promise<void> {
-    await this.browser?.close();
+    const browser = this.browser;
     this.browser = undefined;
+    await browser?.close();
   }
 
-  private async closeCallbackServer(): Promise<void> {
+  private closeCallbackServer(): void {
     const server = this.callbackServer;
     this.callbackServer = undefined;
-    if (!server) return;
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    if (server?.listening) server.close();
   }
 
   private async parseTokenResponse(
@@ -627,10 +666,26 @@ export class CodexService implements OnModuleDestroy {
     if (
       typeof value !== 'object' ||
       value === null ||
-      typeof (value as { access_token?: unknown }).access_token !== 'string'
+      !('access_token' in value) ||
+      typeof value.access_token !== 'string'
     ) {
       throw new UnauthorizedException('Codex token response is invalid');
     }
-    return value as CodexTokenResponse;
+    const token: CodexTokenResponse = { access_token: value.access_token };
+    if ('refresh_token' in value && typeof value.refresh_token === 'string') {
+      token.refresh_token = value.refresh_token;
+    }
+    if ('id_token' in value && typeof value.id_token === 'string') {
+      token.id_token = value.id_token;
+    }
+    if ('expires_in' in value && typeof value.expires_in === 'number') {
+      token.expires_in = value.expires_in;
+    }
+    if ('scope' in value && typeof value.scope === 'string')
+      token.scope = value.scope;
+    if ('token_type' in value && typeof value.token_type === 'string') {
+      token.token_type = value.token_type;
+    }
+    return token;
   }
 }

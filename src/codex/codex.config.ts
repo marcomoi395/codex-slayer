@@ -6,8 +6,7 @@ export interface CodexConfig {
   callbackHost: string;
   callbackPort: number;
   callbackPath: string;
-  createAccountUrl: string;
-  browserEngine: 'camoufox';
-  accountsFile: string;
+  databasePath?: string;
+  encryptionKey?: string;
   stateTtlMs: number;
 }
