@@ -41,3 +41,17 @@ npm run lint
 - E2E tests dưới `test/`.
 - Test behavior, boundary, errors; tránh test wiring hoặc implementation incidental.
 - Chạy test liên quan trước, sau đó full test/e2e/build khi scope thay đổi.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs live in GitHub Issues; use the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the canonical labels `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, and `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context domain docs use root `GLOSSARY.md` and `docs/adr/`. See `docs/agents/domain.md`.
