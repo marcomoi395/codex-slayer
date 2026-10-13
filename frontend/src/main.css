@@ -327,6 +327,34 @@ input:focus {
   background: var(--red);
   color: var(--ink);
 }
+.delete-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.delete-confirm span {
+  flex: 1 1 100%;
+  color: #ffdce0;
+  text-align: right;
+}
+.delete-button:disabled,
+.cancel-button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+.cancel-button {
+  min-height: 36px;
+  padding: 7px 10px;
+  border: 2px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  color: #eee9fa;
+  font:
+    9px 'Press Start 2P',
+    monospace;
+}
 .notice {
   margin: 17px 0 0;
   padding: 10px;

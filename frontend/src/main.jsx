@@ -34,6 +34,9 @@ function App() {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [deleteCandidate, setDeleteCandidate] = useState('');
+  const [deleting, setDeleting] = useState(false);
+  const [refreshError, setRefreshError] = useState('');
 
   useEffect(() => {
     let mounted = true;
@@ -46,9 +49,13 @@ function App() {
         if (mounted) {
           setAccounts(nextAccounts);
           setStatus(nextStatus);
+          setRefreshError('');
         }
-      } catch (refreshError) {
-        if (mounted) setError(refreshError.message);
+      } catch {
+        if (mounted)
+          setRefreshError(
+            'Cannot refresh account status. Check API connection.',
+          );
       }
     };
     void refresh();
@@ -77,14 +84,18 @@ function App() {
   };
 
   const remove = async (connectionId) => {
+    setDeleting(true);
     setError('');
     try {
       await api.delete(connectionId);
       setAccounts((current) =>
         current.filter((account) => account.connectionId !== connectionId),
       );
+      setDeleteCandidate('');
     } catch (deleteError) {
       setError(deleteError.message);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -172,6 +183,11 @@ function App() {
               {error}
             </p>
           )}
+          {refreshError && (
+            <p className="notice failure" role="alert">
+              {refreshError}
+            </p>
+          )}
         </section>
 
         <section
@@ -236,14 +252,40 @@ function App() {
             {accounts.map((account) => (
               <li key={account.connectionId}>
                 <span className="account-email">{account.email}</span>
-                <button
-                  className="delete-button"
-                  type="button"
-                  onClick={() => remove(account.connectionId)}
-                  aria-label={`Delete ${account.email}`}
-                >
-                  DELETE
-                </button>
+                {deleteCandidate === account.connectionId ? (
+                  <div
+                    className="delete-confirm"
+                    role="group"
+                    aria-label={`Confirm deletion of ${account.email}`}
+                  >
+                    <span>Delete encrypted credentials permanently?</span>
+                    <button
+                      className="delete-button"
+                      type="button"
+                      disabled={deleting}
+                      onClick={() => remove(account.connectionId)}
+                    >
+                      {deleting ? 'DELETING…' : 'CONFIRM DELETE'}
+                    </button>
+                    <button
+                      className="cancel-button"
+                      type="button"
+                      disabled={deleting}
+                      onClick={() => setDeleteCandidate('')}
+                    >
+                      CANCEL
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    className="delete-button"
+                    type="button"
+                    onClick={() => setDeleteCandidate(account.connectionId)}
+                    aria-label={`Delete ${account.email}`}
+                  >
+                    DELETE
+                  </button>
+                )}
               </li>
             ))}
           </ul>
