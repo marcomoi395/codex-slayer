@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Query } from '@nestjs/common';
 
 import { CodexService } from './codex.service';
 import type { CodexAccountRequest } from './codex.types';
@@ -24,6 +24,11 @@ export class CodexController {
   @Post('accounts')
   startAccountFlow(@Body() credentials: CodexAccountRequest) {
     return this.codexService.startAccountFlow(credentials);
+  }
+
+  @Delete('accounts/:connectionId')
+  async deleteAccount(@Param('connectionId') connectionId: string): Promise<void> {
+    await this.codexService.deleteAccount(connectionId);
   }
 
   @Get('callback')

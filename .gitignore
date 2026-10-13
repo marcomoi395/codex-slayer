@@ -17,4 +17,5 @@ node_modules/
 
 # OS
 codex-accounts.json
+codex-accounts.sqlite*
 .DS_Store
