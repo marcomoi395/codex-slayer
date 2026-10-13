@@ -8,5 +8,6 @@ export interface CodexConfig {
   callbackPath: string;
   createAccountUrl: string;
   browserEngine: 'camoufox';
+  accountsFile: string;
   stateTtlMs: number;
 }

@@ -48,11 +48,13 @@ type CodexBrowserRoute =
 @Injectable()
 export class CodexService implements OnModuleDestroy {
   private readonly pending = new Map<string, PendingAuthorization>();
-  private readonly connectionsFile = 'codex-accounts.json';
+  private readonly connectionsFile: string;
   private status: CodexStatus = { active: false, logs: [] };
   private browser?: Browser;
   private callbackServer?: Server;
-  constructor(@Inject(CODEX_CONFIG) private readonly config: CodexConfig) {}
+  constructor(@Inject(CODEX_CONFIG) private readonly config: CodexConfig) {
+    this.connectionsFile = config.accountsFile;
+  }
 
   getStatus(): CodexStatus {
     return {

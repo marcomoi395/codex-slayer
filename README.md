@@ -83,6 +83,16 @@ Endpoint chính:
 
 Credential Codex lưu trong `codex-accounts.json`.
 
+## Docker Compose
+
+Chạy backend và frontend:
+
+```bash
+docker compose up --build
+```
+
+Dashboard: `http://localhost:5000/dashboard/`.
+
 When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
 
 If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:

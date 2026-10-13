@@ -12,6 +12,7 @@ const config: CodexConfig = {
   callbackPath: '/auth/callback',
   createAccountUrl: 'https://auth.openai.com/create-account',
   browserEngine: 'camoufox',
+  accountsFile: 'codex-accounts.json',
   stateTtlMs: 600_000,
 };
 

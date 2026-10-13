@@ -34,6 +34,9 @@ import { CodexService } from './codex.service';
           configService.get<string>('CODEX_CREATE_ACCOUNT_URL') ??
           CODEX_DEFAULTS.createAccountUrl,
         browserEngine: 'camoufox',
+        accountsFile:
+          configService.get<string>('CODEX_ACCOUNTS_FILE') ??
+          'codex-accounts.json',
         stateTtlMs: CODEX_DEFAULTS.stateTtlMs,
       }),
     },
