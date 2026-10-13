@@ -32,10 +32,13 @@ export interface CodexStartResponse extends CodexAuthorization {
 export interface CodexAccountRequest {
   email: string;
   password: string;
+  totpSecret?: string;
 }
 export interface CodexAccountSummary {
   email: string;
   connectionId?: string;
+  createdAt?: number;
+  updatedAt?: number;
 }
 
 export interface CodexStatusLog {

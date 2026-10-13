@@ -7,11 +7,11 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { readFile, writeFile } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createServer, type Server } from 'node:http';
 import type { Browser, Locator, Page } from 'playwright-core';
 
+import { AccountVault } from './account-vault';
 import { CODEX_CONFIG } from './codex.constants';
 import type { CodexConfig } from './codex.config';
 import type {
@@ -28,15 +28,10 @@ interface PendingAuthorization extends CodexAuthorization {
   codeVerifier: string;
   redirectUri: string;
   email?: string;
+  password?: string;
+  totpSecret?: string;
 }
 interface ResolvedAccountCredentials extends CodexAccountRequest {}
-interface StoredCodexAccount {
-  connectionId?: string;
-  accessToken: string;
-  refreshToken: string;
-  idToken: string;
-  email: string;
-}
 type CodexBrowserRoute =
   | 'email-entry'
   | 'password'
@@ -48,12 +43,15 @@ type CodexBrowserRoute =
 @Injectable()
 export class CodexService implements OnModuleDestroy {
   private readonly pending = new Map<string, PendingAuthorization>();
-  private readonly connectionsFile: string;
+  private readonly accountVault: AccountVault;
   private status: CodexStatus = { active: false, logs: [] };
   private browser?: Browser;
   private callbackServer?: Server;
   constructor(@Inject(CODEX_CONFIG) private readonly config: CodexConfig) {
-    this.connectionsFile = config.accountsFile;
+    this.accountVault = new AccountVault(
+      config.databasePath ?? 'codex-accounts.sqlite',
+      config.encryptionKey,
+    );
   }
 
   getStatus(): CodexStatus {
@@ -63,9 +61,14 @@ export class CodexService implements OnModuleDestroy {
     };
   }
 
-  async getAccounts(): Promise<CodexAccountSummary[]> {
-    const accounts = await this.loadConnections();
-    return accounts.map(({ email, connectionId }) => ({ email, connectionId }));
+  getAccounts(): Promise<CodexAccountSummary[]> {
+    return this.accountVault.list();
+  }
+
+  async deleteAccount(connectionId: string): Promise<void> {
+    if (!connectionId || !(await this.accountVault.delete(connectionId))) {
+      throw new BadRequestException('Codex account was not found');
+    }
   }
 
   private updateStatus(
@@ -103,6 +106,11 @@ export class CodexService implements OnModuleDestroy {
       });
       this.validateAccountCredentials(credentials);
       authorization = await this.createAuthorizationLink(credentials.email);
+      const pending = this.pending.get(authorization.state);
+      if (pending) {
+        pending.password = credentials.password;
+        pending.totpSecret = credentials.totpSecret;
+      }
       this.updateStatus('browser', {
         step: 'authorization',
         message: 'Opening Codex authorization flow',
@@ -246,8 +254,8 @@ export class CodexService implements OnModuleDestroy {
         scope: token.scope,
         tokenType: token.token_type,
       };
-      if (session.email) {
-        await this.saveConnection(connection, session.email);
+      if (session.email && session.password !== undefined) {
+        await this.saveConnection(connection, session);
       }
       this.pending.delete(state);
       completed = true;
@@ -275,39 +283,28 @@ export class CodexService implements OnModuleDestroy {
 
   private async saveConnection(
     connection: CodexConnection,
-    email: string,
+    session: PendingAuthorization,
   ): Promise<void> {
-    const connections = await this.loadConnections();
-    connections.push({
+    await this.accountVault.upsert({
       connectionId: connection.connectionId,
+      email: session.email!,
+      password: session.password!,
+      totpSecret: session.totpSecret,
       accessToken: connection.accessToken,
-      refreshToken: connection.refreshToken ?? '',
-      idToken: connection.idToken ?? '',
-      email,
+      refreshToken: connection.refreshToken,
+      idToken: connection.idToken,
+      expiresAt: connection.expiresAt,
+      scope: connection.scope,
+      tokenType: connection.tokenType,
     });
-    await writeFile(
-      this.connectionsFile,
-      JSON.stringify(connections, null, 2),
-      'utf8',
-    );
-  }
-
-  private async loadConnections(): Promise<StoredCodexAccount[]> {
-    try {
-      const content = await readFile(this.connectionsFile, 'utf8');
-      const value: unknown = JSON.parse(content);
-      if (!Array.isArray(value)) return [];
-      return value as StoredCodexAccount[];
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
-      throw error;
-    }
   }
 
   async onModuleDestroy(): Promise<void> {
     await this.closeBrowser();
     await this.closeCallbackServer();
+    this.accountVault.close();
   }
+
 
   private validateAccountCredentials(credentials: CodexAccountRequest): void {
     if (
