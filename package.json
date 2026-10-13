@@ -19,8 +19,7 @@
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
-    "camoufox:fetch": "camoufox-js fetch",
-    "google:gmail:oauth": "./scripts/google-gmail-oauth.sh"
+    "camoufox:fetch": "camoufox-js fetch"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",
@@ -31,7 +30,6 @@
     "@nestjs/core": "^11.0.1",
     "@nestjs/platform-express": "^11.0.1",
     "camoufox-js": "^0.12.0",
-    "playwright": "^1.62.1",
     "playwright-core": "^1.60.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",

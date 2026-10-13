@@ -2,9 +2,7 @@ import {
   BadRequestException,
   Inject,
   Injectable,
-  NotFoundException,
   OnModuleDestroy,
-  Optional,
   ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -12,14 +10,10 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createServer, type Server } from 'node:http';
-import { chromium } from 'playwright';
 import type { Browser, Locator, Page } from 'playwright-core';
 
 import { CODEX_CONFIG } from './codex.constants';
 import type { CodexConfig } from './codex.config';
-import { PhoneVerificationProvider } from '../phone-verification/phone-verification.provider';
-import type { PhoneNumberResult } from '../phone-verification/phone-verification.types';
-import { GoogleGmailService } from '../google-gmail/google-gmail.service';
 import type {
   CodexAccountRequest,
   CodexAccountSummary,
@@ -35,9 +29,7 @@ interface PendingAuthorization extends CodexAuthorization {
   redirectUri: string;
   email?: string;
 }
-interface ResolvedAccountCredentials extends CodexAccountRequest {
-  connectionId: string;
-}
+interface ResolvedAccountCredentials extends CodexAccountRequest {}
 interface StoredCodexAccount {
   connectionId?: string;
   accessToken: string;
@@ -60,11 +52,7 @@ export class CodexService implements OnModuleDestroy {
   private status: CodexStatus = { active: false, logs: [] };
   private browser?: Browser;
   private callbackServer?: Server;
-  constructor(
-    @Inject(CODEX_CONFIG) private readonly config: CodexConfig,
-    private readonly googleGmailService: GoogleGmailService,
-    @Optional() private readonly phoneVerificationProvider?: PhoneVerificationProvider,
-  ) {}
+  constructor(@Inject(CODEX_CONFIG) private readonly config: CodexConfig) {}
 
   getStatus(): CodexStatus {
     return {
@@ -111,16 +99,13 @@ export class CodexService implements OnModuleDestroy {
         step: 'credentials',
         message: 'Validating Codex account credentials',
       });
-      const connectionId = await this.validateAccountCredentials(credentials);
+      this.validateAccountCredentials(credentials);
       authorization = await this.createAuthorizationLink(credentials.email);
       this.updateStatus('browser', {
         step: 'authorization',
         message: 'Opening Codex authorization flow',
       });
-      await this.openBrowser(authorization.authorizationUrl, {
-        ...credentials,
-        connectionId,
-      });
+      await this.openBrowser(authorization.authorizationUrl, credentials);
       this.updateStatus('awaiting_callback', {
         step: 'callback',
         message: 'Waiting for Codex authorization callback',
@@ -322,9 +307,7 @@ export class CodexService implements OnModuleDestroy {
     await this.closeCallbackServer();
   }
 
-  private async validateAccountCredentials(
-    credentials: CodexAccountRequest,
-  ): Promise<string> {
+  private validateAccountCredentials(credentials: CodexAccountRequest): void {
     if (
       !credentials ||
       typeof credentials.email !== 'string' ||
@@ -334,18 +317,6 @@ export class CodexService implements OnModuleDestroy {
     ) {
       throw new BadRequestException('Email and password are required');
     }
-
-    const connectionId =
-      await this.googleGmailService.getCredentialConnectionId(
-        credentials.email,
-      );
-    if (!connectionId) {
-      throw new UnauthorizedException(
-        'Gmail credential is not authorized for this email',
-      );
-    }
-
-    return connectionId;
   }
 
 
@@ -593,26 +564,15 @@ export class CodexService implements OnModuleDestroy {
       route,
       url: this.getPageUrl(page),
     });
-    if (route === 'email-verification') {
-      const codeInput = page.locator(
-        'input[autocomplete="one-time-code"], input[inputmode="numeric"], input[name*="code" i], input[id*="code" i]',
+    if (route === 'email-verification' || route === 'add-phone') {
+      throw new ServiceUnavailableException(
+        'Codex email and phone verification require manual completion',
       );
-      await this.waitForVisible(page, codeInput, 30_000, 'email verification code input');
-      await this.completeEmailVerification(
-        page,
-        codeInput,
-        credentials,
-        requestedAfterMs,
-      );
-      return;
-    }
-    if (route === 'add-phone') {
-      await this.completePhoneVerification(page, credentials);
-      return;
     }
     if (route === 'about-you') {
-      await this.completePostPhoneProfile(page, credentials);
-      return;
+      throw new ServiceUnavailableException(
+        'Codex profile completion requires manual completion',
+      );
     }
     if (route === 'consent') {
       const continueButton = page.getByRole('button', {
@@ -627,6 +587,7 @@ export class CodexService implements OnModuleDestroy {
     }
   }
 
+
   private async isVisible(locator: Locator, timeout: number): Promise<boolean> {
     try {
       await locator.waitFor({ state: 'visible', timeout });
@@ -635,313 +596,14 @@ export class CodexService implements OnModuleDestroy {
       return false;
     }
   }
-  private async completeEmailVerification(
-    page: Page,
-    codeInput: Locator,
-    credentials: ResolvedAccountCredentials,
-    requestedAfterMs = Date.now(),
-  ): Promise<void> {
-    const verificationCode = await this.getVerificationCodeWithRetry(
-      credentials.connectionId,
-      requestedAfterMs,
-    );
-    await codeInput.fill(verificationCode);
-
-    const verificationContinueButton = page.getByRole('button', {
-      name: 'Continue',
-      exact: true,
-    });
-    await verificationContinueButton.waitFor({
-      state: 'visible',
-      timeout: 10_000,
-    });
-    const currentRoute = this.getCodexBrowserRoute(page) ?? 'email-verification';
-    await verificationContinueButton.click();
-    console.log('[codex] email verification submitted');
-    await this.dispatchCurrentBrowserRoute(
-      page,
-      credentials,
-      requestedAfterMs,
-      currentRoute,
-    );
-
-  }
-
-  private async getVerificationCodeWithRetry(
-    connectionId: string,
-    requestedAfterMs: number,
-  ): Promise<string> {
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
-      try {
-        return await this.googleGmailService.getLatestOpenAiVerificationCode(
-          connectionId,
-          requestedAfterMs,
-        );
-      } catch (error) {
-        if (!(error instanceof NotFoundException) || attempt === 3) {
-          throw error;
-        }
-        await delay(2_000);
-      }
-    }
-
-    throw new NotFoundException('OpenAI verification code not found');
-  }
-
-  private async hasPhoneSubmissionFallback(page: Page): Promise<boolean> {
-    const pageWithEvaluate = page as Page & {
-      evaluate?: <T>(pageFunction: () => T) => Promise<T>;
-    };
-    if (typeof pageWithEvaluate.evaluate !== 'function') return false;
-
-    for (let attempt = 1; attempt <= 10; attempt += 1) {
-      const found = await pageWithEvaluate.evaluate(() => {
-        const text = document.body?.innerText ?? '';
-        return (
-          /we couldn't send a text message to this phone number[\s\S]*switched to whatsapp/i.test(text) ||
-          /phone number already in use[\s\S]*use a different phone number/i.test(text)
-        );
-      });
-      if (found) return true;
-      await delay(500);
-    }
-    return false;
-  }
-
-  private async selectTextMessage(page: Page): Promise<void> {
-    const pageWithEvaluate = page as Page & {
-      evaluate?: <T>(pageFunction: () => T) => Promise<T>;
-    };
-    if (typeof pageWithEvaluate.evaluate !== 'function') {
-      throw new ServiceUnavailableException(
-        'Unable to select Text message verification',
-      );
-    }
-
-    const selected = await pageWithEvaluate.evaluate(() => {
-      const candidates = Array.from(
-        document.querySelectorAll('input[type="radio"], [role="radio"], label, button'),
-      );
-      const target = candidates.find((element) =>
-        /text message/i.test(
-          `${element.textContent ?? ''} ${element.getAttribute('aria-label') ?? ''}`,
-        ),
-      );
-      if (!target) return false;
-      (target as HTMLElement).click();
-      return true;
-    });
-    if (!selected) {
-      throw new ServiceUnavailableException(
-        'Text message verification option was not found',
-      );
-    }
-  }
-
-  private async returnToPhoneEntryPage(page: Page): Promise<void> {
-    console.log('[codex] returning to phone entry page before retry', {
-      url: this.getPageUrl(page),
-    });
-    await page.goBack({ waitUntil: 'domcontentloaded' });
-    const phoneInput = page.locator(
-      'input[type="tel"]:visible, input[placeholder*="+1"]:visible, input[placeholder*="phone" i]:visible, input[name*="phone" i]:visible, input[id*="phone" i]:visible',
-    );
-    await this.waitForVisible(page, phoneInput, 10_000, 'phone entry input after OTP timeout');
-    console.log('[codex] phone entry page ready for retry', {
-      url: this.getPageUrl(page),
-    });
-  }
-
-  private async completePostPhoneProfile(
-    page: Page,
-    credentials: ResolvedAccountCredentials,
-  ): Promise<void> {
-    const nameInput = page
-      .locator(
-        'input[autocomplete="name"], input[name*="name" i], input[placeholder*="name" i]',
-      )
-      .first();
-    const ageInput = page
-      .locator(
-        'input[type="number"], input[name*="age" i], input[placeholder*="age" i]',
-      )
-      .first();
-    await this.waitForVisible(page, nameInput, 10_000, 'post-phone full name input');
-    await nameInput.fill('Thanh Loi');
-    await this.waitForVisible(page, ageInput, 10_000, 'post-phone age input');
-    await ageInput.fill('23');
-    console.log('[codex] post-phone profile filled', {
-      name: 'Thanh Loi',
-      age: 23,
-      url: this.getPageUrl(page),
-    });
-    const currentRoute = this.getCodexBrowserRoute(page) ?? 'about-you';
-    await page
-      .getByRole('button', { name: /finish creating account/i })
-      .click();
-    console.log('[codex] post-phone profile submitted', {
-      url: this.getPageUrl(page),
-    });
-    await this.dispatchCurrentBrowserRoute(page, credentials, Date.now(), currentRoute);
-  }
-
-  private async completePhoneVerification(
-    page: Page,
-    credentials: ResolvedAccountCredentials,
-  ): Promise<void> {
-    if (!this.phoneVerificationProvider) return;
-
-    console.log('[codex] phone verification started', {
-      hasPhoneProvider: true,
-    });
-    for (let attempt = 1; attempt <= 5; attempt += 1) {
-      let order: PhoneNumberResult | undefined;
-      try {
-        console.log('[codex] requesting SMSPool phone', { attempt });
-        order = await this.phoneVerificationProvider.getPhoneNumber();
-        console.log('[codex] SMSPool phone received', {
-          attempt,
-          orderId: order.orderId,
-          phoneSuffix: order.phoneNumber.slice(-4),
-          expiresAt: order.expiresAt,
-        });
-        const phoneInput = page.locator(
-          'input[type="tel"]:visible, input[placeholder*="+1"]:visible, input[placeholder*="phone" i]:visible, input[name*="phone" i]:visible, input[id*="phone" i]:visible',
-        );
-        const digits = order.phoneNumber.replace(/\D/g, '');
-        const phoneNumber =
-          digits.length === 11 && digits.startsWith('1')
-            ? digits.slice(1)
-            : digits;
-        console.log('[codex] filling phone input', {
-          attempt,
-          orderId: order.orderId,
-          phoneLength: phoneNumber.length,
-          url: this.getPageUrl(page),
-        });
-        await phoneInput.fill(phoneNumber);
-        console.log('[codex] phone input filled; clicking Continue', {
-          attempt,
-          orderId: order.orderId,
-          url: this.getPageUrl(page),
-        });
-        await page.getByRole('button', { name: /continue/i }).last().click();
-        console.log('[codex] phone Continue clicked; waiting for phone OTP', {
-          attempt,
-          orderId: order.orderId,
-          url: this.getPageUrl(page),
-        });
-        if (await this.hasPhoneSubmissionFallback(page)) {
-          console.warn('[codex] phone submission rejected; refunding order', {
-            attempt,
-            orderId: order.orderId,
-            url: this.getPageUrl(page),
-          });
-          await this.phoneVerificationProvider.refund(
-            order.orderId,
-            order.expiresAt,
-          );
-          order = undefined;
-          await this.selectTextMessage(page);
-          console.log('[codex] switched verification method back to Text message');
-          continue;
-        }
-
-        const codeInput = page.locator(
-          'input[autocomplete="one-time-code"], input[inputmode="numeric"], input[name*="code" i], input[id*="code" i]',
-        );
-        await this.waitForVisible(page, codeInput, 30_000, 'phone verification code input');
-        console.log('[codex] phone code input visible; polling SMSPool', {
-          orderId: order.orderId,
-        });
-        const result = await this.phoneVerificationProvider.getCode(
-          order.orderId,
-        );
-        console.log('[codex] SMSPool phone code result', {
-          orderId: order.orderId,
-          received: result.received,
-          hasCode: Boolean(result.code),
-        });
-        if (!result.received || !result.code) {
-          console.log('[codex] SMSPool code unavailable; refunding order', {
-            orderId: order.orderId,
-          });
-          await this.phoneVerificationProvider.refund(
-            order.orderId,
-            order.expiresAt,
-          );
-          order = undefined;
-          await this.returnToPhoneEntryPage(page);
-          continue;
-        }
-        await codeInput.fill(result.code);
-        console.log('[codex] phone code filled');
-        const currentRoute = this.getCodexBrowserRoute(page) ?? 'add-phone';
-        await page.getByRole('button', { name: /continue/i }).last().click();
-        console.log('[codex] phone code Continue clicked');
-        if (this.getCodexBrowserRoute(page) !== currentRoute) {
-          await this.dispatchCurrentBrowserRoute(
-            page,
-            credentials,
-            Date.now(),
-            currentRoute,
-          );
-        }
-        return;
-      } catch (error) {
-        console.error('[codex] phone verification failed', {
-          attempt,
-          orderId: order?.orderId,
-          url: this.getPageUrl(page),
-          error: error instanceof Error ? error.message : String(error),
-        });
-        if (order) {
-          console.log('[codex] refunding failed phone order', {
-            orderId: order.orderId,
-          });
-          await this.phoneVerificationProvider
-            .refund(order.orderId, order.expiresAt)
-            .catch((refundError) =>
-              console.error('[codex] phone order refund failed', {
-                orderId: order?.orderId,
-                error:
-                  refundError instanceof Error
-                    ? refundError.message
-                    : String(refundError),
-              }),
-            );
-        }
-        if (order) {
-          await this.returnToPhoneEntryPage(page).catch((navigationError) =>
-            console.error('[codex] returning to phone entry failed', {
-              error:
-                navigationError instanceof Error
-                  ? navigationError.message
-                  : String(navigationError),
-            }),
-          );
-        }
-        if (attempt === 5) throw error;
-      }
-    }
-
-    console.error('[codex] phone verification exhausted retries');
-    throw new ServiceUnavailableException(
-      'Phone verification code was not received',
-    );
-  }
 
   private async launchBrowser(): Promise<Browser> {
-    if (this.config.browserEngine === 'camoufox') {
-      // Camoufox is ESM-only; load it only for the explicit opt-in engine.
-      const { Camoufox } = await import('camoufox-js');
-      return Camoufox({
-        headless: false,
-        humanize: 0.5,
-      });
-    }
-
-    return chromium.launch({ headless: false }) as unknown as Browser;
+    // Camoufox is ESM-only; dynamic loading keeps the CommonJS Jest runtime compatible.
+    const { Camoufox } = await import('camoufox-js');
+    return Camoufox({
+      headless: false,
+      humanize: 0.5,
+    });
   }
 
   private async closeBrowser(): Promise<void> {

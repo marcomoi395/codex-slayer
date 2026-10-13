@@ -59,58 +59,29 @@ $ npm run test:cov
 
 ## Deployment
 
-## Google Gmail OAuth
+## Codex OAuth
 
-Set these environment variables:
+Codex là luồng xác thực duy nhất của ứng dụng.
 
 ```env
-GOOGLE_CLIENT_ID=<OAuth web client ID>
-GOOGLE_CLIENT_SECRET=<OAuth client secret>
-GOOGLE_REDIRECT_URI=http://localhost:3000/auth/google/gmail/callback
+CODEX_BROWSER=camoufox
 ```
 
-Google Cloud requirements:
-
-1. Enable **Gmail API**.
-2. Configure the OAuth consent screen.
-3. Add your Google account under **Test users** while the app is in testing mode.
-4. Create a **Web application** OAuth client.
-5. Add the redirect URI exactly:
-   `http://localhost:3000/auth/google/gmail/callback`
-
-OAuth flow:
+Khởi động:
 
 ```bash
-curl -i http://localhost:3000/auth/google/gmail/authorize
+npm run start:dev
 ```
 
-After Google redirects to `/callback`, the server writes the full OAuth credential to `credential.json`:
+Endpoint chính:
 
-```json
-{
-  "credential": {
-    "connectionId": "...",
-    "accessToken": "...",
-    "refreshToken": "...",
-    "expiresIn": 3600,
-    "expiresAt": 1730000000000,
-    "scope": "https://www.googleapis.com/auth/gmail.readonly",
-    "tokenType": "Bearer"
-  }
-}
-```
+- `GET /auth/codex/authorize`
+- `GET /auth/codex/status`
+- `GET /auth/codex/accounts`
+- `POST /auth/codex/accounts`
+- `GET /auth/codex/callback`
 
-The authorization `code` is not stored because it is one-time. `GOOGLE_CLIENT_SECRET` is app configuration, not user credential, so it is not written to this file.
-
-Fetch the OpenAI verification code with the in-memory connection:
-
-Interactive OAuth script:
-
-```bash
-npm run google:gmail:oauth
-```
-
-Requirements: running Nest server, configured Google env vars, `curl`, `jq`, and `python3`.
+Credential Codex lưu trong `codex-accounts.json`.
 
 When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
 

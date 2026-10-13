@@ -16,7 +16,5 @@ node_modules/
 !.env.example
 
 # OS
-credential.json
 codex-accounts.json
 .DS_Store
-/data/proton-profile/
