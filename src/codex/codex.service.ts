@@ -95,6 +95,7 @@ export class CodexService implements OnModuleDestroy {
         message: 'Validating Codex account credentials',
       });
       authorization = await this.createAuthorizationLink(credentials.email);
+
       const pending = this.pending.get(authorization.state);
       if (!pending) throw new Error('Authorization state was not created');
       pending.password = credentials.password;
