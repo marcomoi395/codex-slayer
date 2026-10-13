@@ -19,7 +19,6 @@ import type {
   CodexAuthorization,
   CodexCallbackResponse,
   CodexConnection,
-  CodexStartResponse,
   CodexStatus,
   CodexTokenResponse,
 } from './codex.types';
@@ -80,13 +79,13 @@ export class CodexService implements OnModuleDestroy {
 
   async startAccountFlow(
     credentials: CodexAccountRequest,
-  ): Promise<CodexStartResponse> {
+  ): Promise<{ started: true }> {
     this.validateAccountCredentials(credentials);
     if (this.pending.size > 0 || this.status.active) {
       throw new BadRequestException('A Codex login flow is already active');
     }
 
-    let authorization: CodexStartResponse | undefined;
+    let authorization: CodexAuthorization | undefined;
     try {
       this.updateStatus('validating', {
         active: true,
@@ -106,7 +105,7 @@ export class CodexService implements OnModuleDestroy {
         step: 'callback',
         message: 'Waiting for Codex authorization callback',
       });
-      return authorization;
+      return { started: true };
     } catch (error) {
       if (authorization) this.pending.delete(authorization.state);
       await this.closeBrowser();
@@ -121,7 +120,7 @@ export class CodexService implements OnModuleDestroy {
     }
   }
 
-  async createAuthorizationLink(email?: string): Promise<CodexStartResponse> {
+  private async createAuthorizationLink(email?: string): Promise<CodexAuthorization> {
     if (this.pending.size > 0 || this.callbackServer || (this.status.active && this.status.state !== 'validating')) {
       throw new BadRequestException('A Codex authorization flow is already active');
     }
@@ -160,13 +159,7 @@ export class CodexService implements OnModuleDestroy {
       step: 'authorization',
       message: 'Codex authorization flow created',
     });
-    return {
-      state,
-      authorizationUrl,
-      createdAt,
-      callbackUrl: redirectUri,
-      browserUrl: this.config.createAccountUrl,
-    };
+    return { state, authorizationUrl, createdAt };
   }
 
   async handleCallback(

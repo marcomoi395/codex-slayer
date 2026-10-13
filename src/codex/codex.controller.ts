@@ -7,10 +7,6 @@ import type { CodexAccountRequest } from './codex.types';
 export class CodexController {
   constructor(private readonly codexService: CodexService) {}
 
-  @Get('authorize')
-  createAuthorizationLink() {
-    return this.codexService.createAuthorizationLink();
-  }
 
   @Get('status')
   getStatus() {

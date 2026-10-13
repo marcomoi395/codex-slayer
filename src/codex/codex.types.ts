@@ -1,9 +1,3 @@
-export interface CodexAuthorization {
-  state: string;
-  authorizationUrl: string;
-  createdAt: number;
-}
-
 export interface CodexTokenResponse {
   access_token: string;
   refresh_token?: string;
@@ -24,11 +18,6 @@ export interface CodexConnection {
   tokenType?: string;
 }
 
-export interface CodexStartResponse extends CodexAuthorization {
-  callbackUrl: string;
-  browserUrl: string;
-}
-
 export interface CodexCallbackResponse {
   ok: true;
   email?: string;
@@ -40,6 +29,7 @@ export interface CodexAccountRequest {
   password: string;
   totpSecret?: string;
 }
+
 export interface CodexAccountSummary {
   email: string;
   connectionId?: string;
