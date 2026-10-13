@@ -29,6 +29,12 @@ export interface CodexStartResponse extends CodexAuthorization {
   browserUrl: string;
 }
 
+export interface CodexCallbackResponse {
+  ok: true;
+  email?: string;
+  connectionId?: string;
+}
+
 export interface CodexAccountRequest {
   email: string;
   password: string;
