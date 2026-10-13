@@ -37,21 +37,32 @@ describe('AccountVault', () => {
 
     expect(updated.connectionId).toBe(created.connectionId);
     expect(await first.list()).toEqual([
-      expect.objectContaining({ email: 'operator@example.com', connectionId: created.connectionId }),
+      expect.objectContaining({
+        email: 'operator@example.com',
+        connectionId: created.connectionId,
+      }),
     ]);
     const raw = await readFile(databasePath, 'utf8');
-    for (const secret of ['new-password-secret', 'new-totp-secret', 'new-access-token', 'new-refresh-token', 'new-id-token']) {
+    for (const secret of [
+      'new-password-secret',
+      'new-totp-secret',
+      'new-access-token',
+      'new-refresh-token',
+      'new-id-token',
+    ]) {
       expect(raw).not.toContain(secret);
     }
     first.close();
 
     const restarted = new AccountVault(databasePath, 'test-encryption-key');
-    expect(await restarted.get(created.connectionId)).toEqual(expect.objectContaining({
-      email: 'operator@example.com',
-      password: 'new-password-secret',
-      totpSecret: 'new-totp-secret',
-      accessToken: 'new-access-token',
-    }));
+    expect(await restarted.get(created.connectionId)).toEqual(
+      expect.objectContaining({
+        email: 'operator@example.com',
+        password: 'new-password-secret',
+        totpSecret: 'new-totp-secret',
+        accessToken: 'new-access-token',
+      }),
+    );
     expect(await restarted.delete(created.connectionId)).toBe(true);
     expect(await restarted.list()).toEqual([]);
     restarted.close();
@@ -59,7 +70,9 @@ describe('AccountVault', () => {
 
   it('rejects vault access without an encryption key', async () => {
     const vault = new AccountVault(databasePath);
-    await expect(vault.list()).rejects.toThrow('CODEX_ENCRYPTION_KEY is required');
+    await expect(vault.list()).rejects.toThrow(
+      'CODEX_ENCRYPTION_KEY is required',
+    );
     vault.close();
   });
 });

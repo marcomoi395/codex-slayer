@@ -10,18 +10,21 @@ const api = {
     });
     const text = await response.text();
     const data = text ? JSON.parse(text) : null;
-    if (!response.ok) throw new Error(data?.message ?? `HTTP ${response.status}`);
+    if (!response.ok)
+      throw new Error(data?.message ?? `HTTP ${response.status}`);
     return data;
   },
   accounts: () => api.request('/auth/codex/accounts'),
   status: () => api.request('/auth/codex/status'),
-  start: (credentials) => api.request('/auth/codex/accounts', {
-    method: 'POST',
-    body: JSON.stringify(credentials),
-  }),
-  delete: (connectionId) => api.request(`/auth/codex/accounts/${encodeURIComponent(connectionId)}`, {
-    method: 'DELETE',
-  }),
+  start: (credentials) =>
+    api.request('/auth/codex/accounts', {
+      method: 'POST',
+      body: JSON.stringify(credentials),
+    }),
+  delete: (connectionId) =>
+    api.request(`/auth/codex/accounts/${encodeURIComponent(connectionId)}`, {
+      method: 'DELETE',
+    }),
 };
 
 function App() {
@@ -36,7 +39,10 @@ function App() {
     let mounted = true;
     const refresh = async () => {
       try {
-        const [nextAccounts, nextStatus] = await Promise.all([api.accounts(), api.status()]);
+        const [nextAccounts, nextStatus] = await Promise.all([
+          api.accounts(),
+          api.status(),
+        ]);
         if (mounted) {
           setAccounts(nextAccounts);
           setStatus(nextStatus);
@@ -74,7 +80,9 @@ function App() {
     setError('');
     try {
       await api.delete(connectionId);
-      setAccounts((current) => current.filter((account) => account.connectionId !== connectionId));
+      setAccounts((current) =>
+        current.filter((account) => account.connectionId !== connectionId),
+      );
     } catch (deleteError) {
       setError(deleteError.message);
     }
@@ -100,7 +108,9 @@ function App() {
       <div className="content-grid">
         <section className="panel login-panel" aria-labelledby="login-heading">
           <div className="panel-heading">
-            <span className="pixel-badge" aria-hidden="true">01</span>
+            <span className="pixel-badge" aria-hidden="true">
+              01
+            </span>
             <div>
               <p className="eyebrow">AUTHENTICATE</p>
               <h2 id="login-heading">Account credentials</h2>
@@ -115,7 +125,9 @@ function App() {
               type="email"
               required
               value={form.email}
-              onChange={(event) => setForm({ ...form, email: event.target.value })}
+              onChange={(event) =>
+                setForm({ ...form, email: event.target.value })
+              }
             />
             <label htmlFor="password">Password</label>
             <input
@@ -125,7 +137,9 @@ function App() {
               type="password"
               required
               value={form.password}
-              onChange={(event) => setForm({ ...form, password: event.target.value })}
+              onChange={(event) =>
+                setForm({ ...form, password: event.target.value })
+              }
             />
             <label htmlFor="totp-secret">Authenticator secret</label>
             <input
@@ -136,20 +150,40 @@ function App() {
               inputMode="text"
               required
               value={form.totpSecret}
-              onChange={(event) => setForm({ ...form, totpSecret: event.target.value })}
+              onChange={(event) =>
+                setForm({ ...form, totpSecret: event.target.value })
+              }
             />
-            <p className="field-hint">Base32 secret. The six-digit code is generated only during sign-in.</p>
+            <p className="field-hint">
+              Base32 secret. The six-digit code is generated only during
+              sign-in.
+            </p>
             <button className="primary-button" type="submit" disabled={locked}>
               {locked ? 'LOGIN RUNNING…' : 'START CODEX LOGIN'}
             </button>
           </form>
-          {message && <p className="notice success" role="status">{message}</p>}
-          {error && <p className="notice failure" role="alert">{error}</p>}
+          {message && (
+            <p className="notice success" role="status">
+              {message}
+            </p>
+          )}
+          {error && (
+            <p className="notice failure" role="alert">
+              {error}
+            </p>
+          )}
         </section>
 
-        <section className="panel status-panel" aria-labelledby="status-heading" aria-live="polite">
+        <section
+          className="panel status-panel"
+          aria-labelledby="status-heading"
+          aria-live="polite"
+        >
           <div className="panel-heading">
-            <span className={`status-lamp ${status.active ? 'active' : ''}`} aria-hidden="true" />
+            <span
+              className={`status-lamp ${status.active ? 'active' : ''}`}
+              aria-hidden="true"
+            />
             <div>
               <p className="eyebrow">LIVE PROCESS</p>
               <h2 id="status-heading">Login status</h2>
@@ -157,22 +191,44 @@ function App() {
           </div>
           <p className="state-name">{state.replaceAll('_', ' ')}</p>
           {status.email && <p className="state-email">{status.email}</p>}
-          {status.step && <p className="state-step">STEP // {status.step.replaceAll('_', ' ')}</p>}
+          {status.step && (
+            <p className="state-step">
+              STEP // {status.step.replaceAll('_', ' ')}
+            </p>
+          )}
           {status.logs?.length > 0 ? (
             <ol className="log-list">
-              {status.logs.map((log) => <li key={`${log.at}-${log.message}`}>{log.message}</li>)}
+              {status.logs.map((log) => (
+                <li key={`${log.at}-${log.message}`}>{log.message}</li>
+              ))}
             </ol>
-          ) : <p className="quiet">Ready when you are.</p>}
-          <div className="pixel-rainbow" aria-hidden="true"><i /><i /><i /><i /><i /><i /></div>
+          ) : (
+            <p className="quiet">Ready when you are.</p>
+          )}
+          <div className="pixel-rainbow" aria-hidden="true">
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+          </div>
         </section>
       </div>
 
-      <section className="panel accounts-panel" aria-labelledby="accounts-heading">
+      <section
+        className="panel accounts-panel"
+        aria-labelledby="accounts-heading"
+      >
         <div className="panel-heading">
-          <span className="pixel-badge" aria-hidden="true">02</span>
+          <span className="pixel-badge" aria-hidden="true">
+            02
+          </span>
           <div>
             <p className="eyebrow">LOCAL VAULT</p>
-            <h2 id="accounts-heading">Saved accounts <span className="count">{accounts.length}</span></h2>
+            <h2 id="accounts-heading">
+              Saved accounts <span className="count">{accounts.length}</span>
+            </h2>
           </div>
         </div>
         {accounts.length ? (
@@ -180,16 +236,26 @@ function App() {
             {accounts.map((account) => (
               <li key={account.connectionId}>
                 <span className="account-email">{account.email}</span>
-                <button className="delete-button" type="button" onClick={() => remove(account.connectionId)} aria-label={`Delete ${account.email}`}>
+                <button
+                  className="delete-button"
+                  type="button"
+                  onClick={() => remove(account.connectionId)}
+                  aria-label={`Delete ${account.email}`}
+                >
                   DELETE
                 </button>
               </li>
             ))}
           </ul>
-        ) : <p className="quiet">No saved accounts yet.</p>}
+        ) : (
+          <p className="quiet">No saved accounts yet.</p>
+        )}
       </section>
 
-      <footer>PIXEL LOGIN SYSTEM <span aria-hidden="true">//</span> SECRETS STAY IN THE VAULT</footer>
+      <footer>
+        PIXEL LOGIN SYSTEM <span aria-hidden="true">//</span> SECRETS STAY IN
+        THE VAULT
+      </footer>
     </main>
   );
 }

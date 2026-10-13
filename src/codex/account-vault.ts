@@ -1,4 +1,9 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  randomBytes,
+} from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -84,9 +89,13 @@ export class AccountVault {
         id,
         email,
         this.encrypt(record.password),
-        record.totpSecret === undefined ? null : this.encrypt(record.totpSecret),
+        record.totpSecret === undefined
+          ? null
+          : this.encrypt(record.totpSecret),
         this.encrypt(record.accessToken),
-        record.refreshToken === undefined ? null : this.encrypt(record.refreshToken),
+        record.refreshToken === undefined
+          ? null
+          : this.encrypt(record.refreshToken),
         record.idToken === undefined ? null : this.encrypt(record.idToken),
         record.expiresAt ?? null,
         record.scope ?? null,
@@ -127,11 +136,17 @@ export class AccountVault {
       connectionId: stored.connectionId,
       email: stored.email,
       password: this.decrypt(stored.password),
-      totpSecret: stored.totpSecret === null ? undefined : this.decrypt(stored.totpSecret),
+      totpSecret:
+        stored.totpSecret === null
+          ? undefined
+          : this.decrypt(stored.totpSecret),
       accessToken: this.decrypt(stored.accessToken),
       refreshToken:
-        stored.refreshToken === null ? undefined : this.decrypt(stored.refreshToken),
-      idToken: stored.idToken === null ? undefined : this.decrypt(stored.idToken),
+        stored.refreshToken === null
+          ? undefined
+          : this.decrypt(stored.refreshToken),
+      idToken:
+        stored.idToken === null ? undefined : this.decrypt(stored.idToken),
       expiresAt: stored.expiresAt ?? undefined,
       scope: stored.scope ?? undefined,
       tokenType: stored.tokenType ?? undefined,
@@ -143,10 +158,12 @@ export class AccountVault {
     this.database = undefined;
   }
 
-  private requireKey(): asserts this is this & { key: Buffer } {
-    if (!this.key) {
-      throw new Error('CODEX_ENCRYPTION_KEY is required to access the account vault');
-    }
+  private requireKey(): Buffer {
+    if (!this.key)
+      throw new Error(
+        'CODEX_ENCRYPTION_KEY is required to access the account vault',
+      );
+    return this.key;
   }
 
   private async getDatabase(): Promise<DatabaseSync> {
@@ -175,17 +192,25 @@ export class AccountVault {
 
   private encrypt(value: string): string {
     const iv = randomBytes(12);
-    const cipher = createCipheriv('aes-256-gcm', this.key, iv);
-    const ciphertext = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
+    const cipher = createCipheriv('aes-256-gcm', this.requireKey(), iv);
+    const ciphertext = Buffer.concat([
+      cipher.update(value, 'utf8'),
+      cipher.final(),
+    ]);
     return [iv, cipher.getAuthTag(), ciphertext]
       .map((part) => part.toString('base64url'))
       .join('.');
   }
 
   private decrypt(value: string): string {
-    const [iv, authTag, ciphertext] = value.split('.').map((part) => Buffer.from(part, 'base64url'));
-    const decipher = createDecipheriv('aes-256-gcm', this.key, iv);
+    const [iv, authTag, ciphertext] = value
+      .split('.')
+      .map((part) => Buffer.from(part, 'base64url'));
+    const decipher = createDecipheriv('aes-256-gcm', this.requireKey(), iv);
     decipher.setAuthTag(authTag);
-    return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');
+    return Buffer.concat([
+      decipher.update(ciphertext),
+      decipher.final(),
+    ]).toString('utf8');
   }
 }

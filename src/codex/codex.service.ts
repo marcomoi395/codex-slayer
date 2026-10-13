@@ -6,7 +6,8 @@ import {
   ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
-import { createHmac, createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { authenticator } from 'otplib';
 import { createServer, type Server } from 'node:http';
 import type { Browser, Locator, Page } from 'playwright-core';
 
@@ -109,7 +110,7 @@ export class CodexService implements OnModuleDestroy {
     } catch (error) {
       if (authorization) this.pending.delete(authorization.state);
       await this.closeBrowser();
-      await this.closeCallbackServer();
+      this.closeCallbackServer();
       this.updateStatus('failed', {
         active: false,
         step: 'start',
@@ -120,9 +121,17 @@ export class CodexService implements OnModuleDestroy {
     }
   }
 
-  private async createAuthorizationLink(email?: string): Promise<CodexAuthorization> {
-    if (this.pending.size > 0 || this.callbackServer || (this.status.active && this.status.state !== 'validating')) {
-      throw new BadRequestException('A Codex authorization flow is already active');
+  private async createAuthorizationLink(
+    email?: string,
+  ): Promise<CodexAuthorization> {
+    if (
+      this.pending.size > 0 ||
+      this.callbackServer ||
+      (this.status.active && this.status.state !== 'validating')
+    ) {
+      throw new BadRequestException(
+        'A Codex authorization flow is already active',
+      );
     }
 
     const codeVerifier = randomBytes(32).toString('base64url');
@@ -133,8 +142,10 @@ export class CodexService implements OnModuleDestroy {
     try {
       await this.startCallbackServer();
     } catch {
-      await this.closeCallbackServer();
-      throw new ServiceUnavailableException('Unable to start the OAuth callback server');
+      this.closeCallbackServer();
+      throw new ServiceUnavailableException(
+        'Unable to start the OAuth callback server',
+      );
     }
     const redirectUri = this.getRedirectUri();
     const createdAt = Date.now();
@@ -181,8 +192,12 @@ export class CodexService implements OnModuleDestroy {
     const session = this.pending.get(state);
     if (!session || Date.now() - session.createdAt > this.config.stateTtlMs) {
       if (session) this.pending.delete(state);
-      await this.failCallback('Codex authorization state was invalid or expired');
-      throw new UnauthorizedException('Codex OAuth state is invalid or expired');
+      await this.failCallback(
+        'Codex authorization state was invalid or expired',
+      );
+      throw new UnauthorizedException(
+        'Codex OAuth state is invalid or expired',
+      );
     }
 
     try {
@@ -205,7 +220,8 @@ export class CodexService implements OnModuleDestroy {
           code_verifier: session.codeVerifier,
         }),
       });
-      if (!response.ok) throw new UnauthorizedException('Codex token exchange failed');
+      if (!response.ok)
+        throw new UnauthorizedException('Codex token exchange failed');
 
       const token = await this.parseTokenResponse(response);
       const connection: CodexConnection = {
@@ -224,7 +240,9 @@ export class CodexService implements OnModuleDestroy {
         await this.saveConnection(connection, session);
       }
       const account = session.email
-        ? (await this.accountVault.list()).find((item) => item.email === session.email)
+        ? (await this.accountVault.list()).find(
+            (item) => item.email === session.email,
+          )
         : undefined;
       this.pending.delete(state);
       this.updateStatus('completed', {
@@ -250,13 +268,12 @@ export class CodexService implements OnModuleDestroy {
       throw callbackError;
     } finally {
       await this.closeBrowser();
-      await this.closeCallbackServer();
     }
   }
 
   async onModuleDestroy(): Promise<void> {
     await this.closeBrowser();
-    await this.closeCallbackServer();
+    this.closeCallbackServer();
     this.pending.clear();
     this.accountVault.close();
   }
@@ -291,9 +308,13 @@ export class CodexService implements OnModuleDestroy {
       typeof credentials.totpSecret !== 'string' ||
       !credentials.totpSecret.trim()
     ) {
-      throw new BadRequestException('Email, password and TOTP secret are required');
+      throw new BadRequestException(
+        'Email, password and TOTP secret are required',
+      );
     }
-    const normalizedTotp = credentials.totpSecret.replace(/[\s-]/g, '').toUpperCase();
+    const normalizedTotp = credentials.totpSecret
+      .replace(/[\s-]/g, '')
+      .toUpperCase();
     const unpaddedLength = normalizedTotp.replace(/=+$/, '').length;
     if (
       !/^[A-Z2-7]+=*$/.test(normalizedTotp) ||
@@ -329,7 +350,9 @@ export class CodexService implements OnModuleDestroy {
   private getRedirectUri(): string {
     const address = this.callbackServer?.address();
     const port =
-      address && typeof address === 'object' ? address.port : this.config.callbackPort;
+      address && typeof address === 'object'
+        ? address.port
+        : this.config.callbackPort;
     return `http://${this.config.callbackHost}:${port}${this.config.callbackPath}`;
   }
 
@@ -346,8 +369,11 @@ export class CodexService implements OnModuleDestroy {
         url.searchParams.get('state') ?? undefined,
         url.searchParams.get('error') ?? undefined,
       )
-        .then(() => response.writeHead(200).end('Codex authorization complete.'))
-        .catch(() => response.writeHead(400).end('Codex authorization failed.'));
+        .then(() =>
+          response.writeHead(200).end('Codex authorization complete.'),
+        )
+        .catch(() => response.writeHead(400).end('Codex authorization failed.'))
+        .finally(() => this.closeCallbackServer());
     });
     await new Promise<void>((resolve, reject) => {
       const server = this.callbackServer!;
@@ -404,18 +430,27 @@ export class CodexService implements OnModuleDestroy {
       page.getByRole('textbox', { name: /email(?: address)?/i }),
     ]);
     await field.fill(email);
-    this.updateStatus('email', { step: 'email', message: 'Submitting Codex email' });
+    this.updateStatus('email', {
+      step: 'email',
+      message: 'Submitting Codex email',
+    });
     await this.continueButton(page).click();
   }
 
-  private async fillAndSubmitPassword(page: Page, password: string): Promise<void> {
+  private async fillAndSubmitPassword(
+    page: Page,
+    password: string,
+  ): Promise<void> {
     await this.waitForSafeRoute(page);
     const field = await this.findVisible(page, [
       page.getByLabel(/password/i),
       page.getByRole('textbox', { name: /password/i }),
     ]);
     await field.fill(password);
-    this.updateStatus('password', { step: 'password', message: 'Submitting Codex password' });
+    this.updateStatus('password', {
+      step: 'password',
+      message: 'Submitting Codex password',
+    });
     await this.continueButton(page).click();
   }
 
@@ -423,11 +458,18 @@ export class CodexService implements OnModuleDestroy {
     await this.waitForSafeRoute(page);
     const field = await this.findVisible(page, [
       page.getByLabel(/one[- ]time|verification|authenticator|security code/i),
-      page.getByRole('textbox', { name: /one[- ]time|verification|authenticator|security code/i }),
+      page.getByRole('textbox', {
+        name: /one[- ]time|verification|authenticator|security code/i,
+      }),
     ]);
-    const code = this.generateTotp(secret);
+    const code = authenticator.generate(
+      secret.replace(/[\s-]/g, '').toUpperCase(),
+    );
     await field.fill(code);
-    this.updateStatus('totp', { step: 'totp', message: 'Submitting one-time code' });
+    this.updateStatus('totp', {
+      step: 'totp',
+      message: 'Submitting one-time code',
+    });
     await this.continueButton(page).click();
   }
 
@@ -436,7 +478,10 @@ export class CodexService implements OnModuleDestroy {
     const consent = page.getByRole('button', { name: 'Continue', exact: true });
     try {
       await consent.waitFor({ state: 'visible', timeout: 3_000 });
-      this.updateStatus('consent', { step: 'consent', message: 'Confirming Codex consent' });
+      this.updateStatus('consent', {
+        step: 'consent',
+        message: 'Confirming Codex consent',
+      });
       await consent.click();
     } catch {
       // Consent is optional. Callback navigation may already be in progress.
@@ -457,20 +502,34 @@ export class CodexService implements OnModuleDestroy {
       }
     }
     this.ensureSafeRoute(page);
-    throw new ServiceUnavailableException('Codex login page changed; manual completion is required');
+    throw new ServiceUnavailableException(
+      'Codex login page changed; manual completion is required',
+    );
   }
 
   private async waitForSafeRoute(page: Page): Promise<void> {
     const started = Date.now();
     while (Date.now() - started < 15_000) {
       const route = this.getBrowserRoute(page);
-      if (route === 'captcha' || route === 'email-verification' || route === 'phone-verification') {
+      if (
+        route === 'captcha' ||
+        route === 'email-verification' ||
+        route === 'phone-verification'
+      ) {
         throw new ServiceUnavailableException(MANUAL_STEP_MESSAGE);
       }
       if (route === 'onboarding' || route === 'unsupported') {
-        throw new ServiceUnavailableException('Codex login route changed; manual completion is required');
+        throw new ServiceUnavailableException(
+          'Codex login route changed; manual completion is required',
+        );
       }
-      if (route === 'password' || route === 'totp' || route === 'consent' || route === 'email') return;
+      if (
+        route === 'password' ||
+        route === 'totp' ||
+        route === 'consent' ||
+        route === 'email'
+      )
+        return;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
     this.ensureSafeRoute(page);
@@ -478,11 +537,17 @@ export class CodexService implements OnModuleDestroy {
 
   private ensureSafeRoute(page: Page): void {
     const route = this.getBrowserRoute(page);
-    if (route === 'captcha' || route === 'email-verification' || route === 'phone-verification') {
+    if (
+      route === 'captcha' ||
+      route === 'email-verification' ||
+      route === 'phone-verification'
+    ) {
       throw new ServiceUnavailableException(MANUAL_STEP_MESSAGE);
     }
     if (route === 'onboarding' || route === 'unsupported') {
-      throw new ServiceUnavailableException('Codex login route changed; manual completion is required');
+      throw new ServiceUnavailableException(
+        'Codex login route changed; manual completion is required',
+      );
     }
   }
 
@@ -494,47 +559,21 @@ export class CodexService implements OnModuleDestroy {
       return 'unsupported';
     }
     if (/captcha/.test(pathname)) return 'captcha';
-    if (/email[-_/]verification|verify[-_/]email/.test(pathname)) return 'email-verification';
+    if (/email[-_/]verification|verify[-_/]email/.test(pathname))
+      return 'email-verification';
     if (/phone|add[-_/]phone/.test(pathname)) return 'phone-verification';
     if (/about[-_/]you|onboard|profile/.test(pathname)) return 'onboarding';
     if (/password/.test(pathname)) return 'password';
     if (/totp|mfa|otp|one[-_/]time|verification/.test(pathname)) return 'totp';
     if (/consent/.test(pathname)) return 'consent';
-    if (/create[-_/]account|sign[-_/]in|authorize|identifier/.test(pathname)) return 'email';
+    if (
+      /create[-_/]account|sign[-_/]in|log[-_/]in|authorize|identifier/.test(
+        pathname,
+      )
+    )
+      return 'email';
     if (/callback/.test(pathname)) return 'consent';
     return 'unsupported';
-  }
-
-  private generateTotp(secret: string): string {
-    const normalized = secret.replace(/[\s-]/g, '').toUpperCase();
-    if (!/^[A-Z2-7]+=*$/.test(normalized)) throw new Error('Invalid TOTP secret');
-    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-    const bytes: number[] = [];
-    let buffer = 0;
-    let bits = 0;
-    for (const character of normalized.replace(/=+$/, '')) {
-      const value = alphabet.indexOf(character);
-      if (value < 0) throw new Error('Invalid TOTP secret');
-      buffer = (buffer << 5) | value;
-      bits += 5;
-      if (bits >= 8) {
-        bits -= 8;
-        bytes.push((buffer >> bits) & 0xff);
-      }
-    }
-    if (bytes.length === 0) throw new Error('Invalid TOTP secret');
-    const counter = Math.floor(Date.now() / 30_000);
-    const counterBuffer = Buffer.alloc(8);
-    counterBuffer.writeUInt32BE(Math.floor(counter / 0x1_0000_0000), 0);
-    counterBuffer.writeUInt32BE(counter >>> 0, 4);
-    const digest = createHmac('sha1', Buffer.from(bytes)).update(counterBuffer).digest();
-    const offset = digest[digest.length - 1] & 0x0f;
-    const value =
-      ((digest[offset] & 0x7f) << 24) |
-      (digest[offset + 1] << 16) |
-      (digest[offset + 2] << 8) |
-      digest[offset + 3];
-    return String(value % 1_000_000).padStart(6, '0');
   }
 
   private updateStatus(
@@ -547,19 +586,37 @@ export class CodexService implements OnModuleDestroy {
       message?: string;
     } = {},
   ): void {
-    const { active = this.status.active, email, step, level, message } = options;
+    const {
+      active = this.status.active,
+      email,
+      step,
+      level,
+      message,
+    } = options;
     this.status = {
       active,
       state,
-      ...(email !== undefined ? { email } : this.status.email ? { email: this.status.email } : {}),
-      ...(step !== undefined ? { step } : this.status.step ? { step: this.status.step } : {}),
+      ...(email !== undefined
+        ? { email }
+        : this.status.email
+          ? { email: this.status.email }
+          : {}),
+      ...(step !== undefined
+        ? { step }
+        : this.status.step
+          ? { step: this.status.step }
+          : {}),
       logs: message
-        ? [...this.status.logs, { at: Date.now(), message, ...(level ? { level } : {}) }].slice(-20)
+        ? [
+            ...this.status.logs,
+            { at: Date.now(), message, ...(level ? { level } : {}) },
+          ].slice(-20)
         : this.status.logs,
     };
   }
 
   private async failCallback(message: string): Promise<void> {
+    this.pending.clear();
     this.updateStatus('failed', {
       active: false,
       step: 'callback',
@@ -567,7 +624,7 @@ export class CodexService implements OnModuleDestroy {
       message,
     });
     await this.closeBrowser();
-    await this.closeCallbackServer();
+    this.closeCallbackServer();
   }
 
   private safeFailureMessage(error: unknown): string {
@@ -579,7 +636,7 @@ export class CodexService implements OnModuleDestroy {
   private async launchBrowser(): Promise<Browser> {
     // camoufox-js is ESM-only; static import breaks the CommonJS Jest runtime.
     const { Camoufox } = await import('camoufox-js');
-    return Camoufox({ headless: false, humanize: 0.5 });
+    return Camoufox({ headless: true });
   }
 
   private async closeBrowser(): Promise<void> {
@@ -588,15 +645,15 @@ export class CodexService implements OnModuleDestroy {
     await browser?.close();
   }
 
-  private async closeCallbackServer(): Promise<void> {
+  private closeCallbackServer(): void {
     const server = this.callbackServer;
     this.callbackServer = undefined;
-    if (!server) return;
-    if (!server.listening) return;
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    if (server?.listening) server.close();
   }
 
-  private async parseTokenResponse(response: Response): Promise<CodexTokenResponse> {
+  private async parseTokenResponse(
+    response: Response,
+  ): Promise<CodexTokenResponse> {
     const value: unknown = await response.json();
     if (
       typeof value !== 'object' ||
@@ -616,7 +673,8 @@ export class CodexService implements OnModuleDestroy {
     if ('expires_in' in value && typeof value.expires_in === 'number') {
       token.expires_in = value.expires_in;
     }
-    if ('scope' in value && typeof value.scope === 'string') token.scope = value.scope;
+    if ('scope' in value && typeof value.scope === 'string')
+      token.scope = value.scope;
     if ('token_type' in value && typeof value.token_type === 'string') {
       token.token_type = value.token_type;
     }

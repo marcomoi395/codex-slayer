@@ -10,6 +10,7 @@
     "build:frontend": "vite build",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",
+    "start:frontend": "vite --host 0.0.0.0",
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/main",
@@ -22,14 +23,12 @@
     "camoufox:fetch": "camoufox-js fetch"
   },
   "dependencies": {
-    "@emotion/react": "^11.14.0",
-    "@emotion/styled": "^11.14.1",
-    "@mui/material": "^9.3.1",
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^4.0.4",
     "@nestjs/core": "^11.0.1",
     "@nestjs/platform-express": "^11.0.1",
     "camoufox-js": "^0.12.0",
+    "otplib": "^12.0.1",
     "playwright-core": "^1.60.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",

@@ -14,7 +14,8 @@ import { CodexService } from './codex.service';
       inject: [ConfigService],
       useFactory: (configService: ConfigService): CodexConfig => {
         const encryptionKey = configService.get<string>('CODEX_ENCRYPTION_KEY');
-        const environment = configService.get<string>('NODE_ENV') ?? process.env.NODE_ENV;
+        const environment =
+          configService.get<string>('NODE_ENV') ?? process.env.NODE_ENV;
         if (environment === 'production' && !encryptionKey?.trim()) {
           throw new Error('CODEX_ENCRYPTION_KEY is required in production');
         }
@@ -36,13 +37,6 @@ import { CodexService } from './codex.service';
             configService.get<number>('CODEX_CALLBACK_PORT') ??
             CODEX_DEFAULTS.callbackPort,
           callbackPath: CODEX_DEFAULTS.callbackPath,
-          createAccountUrl:
-            configService.get<string>('CODEX_CREATE_ACCOUNT_URL') ??
-            CODEX_DEFAULTS.createAccountUrl,
-          browserEngine: 'camoufox',
-          accountsFile:
-            configService.get<string>('CODEX_ACCOUNTS_FILE') ??
-            'codex-accounts.json',
           databasePath:
             configService.get<string>('CODEX_DATABASE_PATH') ??
             'codex-accounts.sqlite',

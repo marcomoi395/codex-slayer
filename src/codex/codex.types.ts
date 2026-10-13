@@ -1,3 +1,9 @@
+export interface CodexAuthorization {
+  state: string;
+  authorizationUrl: string;
+  createdAt: number;
+}
+
 export interface CodexTokenResponse {
   access_token: string;
   refresh_token?: string;

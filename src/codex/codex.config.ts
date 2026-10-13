@@ -6,7 +6,6 @@ export interface CodexConfig {
   callbackHost: string;
   callbackPort: number;
   callbackPath: string;
-  accountsFile: string;
   databasePath?: string;
   encryptionKey?: string;
   stateTtlMs: number;

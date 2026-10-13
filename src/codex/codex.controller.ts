@@ -1,4 +1,12 @@
-import { Body, Controller, Delete, Get, Param, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Post,
+  Query,
+} from '@nestjs/common';
 
 import { CodexService } from './codex.service';
 import type { CodexAccountRequest } from './codex.types';
@@ -6,7 +14,6 @@ import type { CodexAccountRequest } from './codex.types';
 @Controller('auth/codex')
 export class CodexController {
   constructor(private readonly codexService: CodexService) {}
-
 
   @Get('status')
   getStatus() {
@@ -23,7 +30,9 @@ export class CodexController {
   }
 
   @Delete('accounts/:connectionId')
-  async deleteAccount(@Param('connectionId') connectionId: string): Promise<void> {
+  async deleteAccount(
+    @Param('connectionId') connectionId: string,
+  ): Promise<void> {
     await this.codexService.deleteAccount(connectionId);
   }
 

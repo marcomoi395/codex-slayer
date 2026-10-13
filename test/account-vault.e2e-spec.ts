@@ -1,6 +1,7 @@
 import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
+import { App } from 'supertest/types';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,7 +11,7 @@ import { AccountVault } from '../src/codex/account-vault';
 const encryptionKey = 'http-test-encryption-key';
 
 describe('account vault API', () => {
-  let app: INestApplication;
+  let app: INestApplication<App>;
   let directory: string;
   let databasePath: string;
 
@@ -19,7 +20,9 @@ describe('account vault API', () => {
     databasePath = join(directory, 'accounts.sqlite');
     process.env.CODEX_ENCRYPTION_KEY = encryptionKey;
     process.env.CODEX_DATABASE_PATH = databasePath;
-    const module = await Test.createTestingModule({ imports: [AppModule] }).compile();
+    const module = await Test.createTestingModule({
+      imports: [AppModule],
+    }).compile();
     app = module.createNestApplication();
     await app.init();
   });
@@ -41,11 +44,18 @@ describe('account vault API', () => {
     });
     vault.close();
 
-    const listed = await request(app.getHttpServer()).get('/auth/codex/accounts').expect(200);
+    const listed = await request(app.getHttpServer())
+      .get('/auth/codex/accounts')
+      .expect(200);
     expect(listed.body).toEqual([
-      expect.objectContaining({ email: 'api@example.com', connectionId: account.connectionId }),
+      expect.objectContaining({
+        email: 'api@example.com',
+        connectionId: account.connectionId,
+      }),
     ]);
-    expect(JSON.stringify(listed.body)).not.toMatch(/password-secret|totp-secret|access-token/);
+    expect(JSON.stringify(listed.body)).not.toMatch(
+      /password-secret|totp-secret|access-token/,
+    );
 
     await request(app.getHttpServer())
       .delete(`/auth/codex/accounts/${account.connectionId}`)
@@ -53,5 +63,16 @@ describe('account vault API', () => {
     const afterDeleteVault = new AccountVault(databasePath, encryptionKey);
     expect(await afterDeleteVault.list()).toEqual([]);
     afterDeleteVault.close();
+  });
+
+  it('rejects a callback with an unknown OAuth state', async () => {
+    await request(app.getHttpServer())
+      .get('/auth/codex/callback')
+      .query({ code: 'fixture-code', state: 'unknown-state' })
+      .expect(401);
+    const status = await request(app.getHttpServer())
+      .get('/auth/codex/status')
+      .expect(200);
+    expect(status.body).toMatchObject({ state: 'failed', active: false });
   });
 });
