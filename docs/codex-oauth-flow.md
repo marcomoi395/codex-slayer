@@ -8,6 +8,7 @@ The app manages Codex account login through Camoufox, OAuth PKCE and a local SQL
 CODEX_CLIENT_ID=app_EMoamEE73f0CkXaXp7hrann
 CODEX_AUTHORIZATION_URL=https://auth.openai.com/oauth/authorize
 CODEX_TOKEN_URL=https://auth.openai.com/oauth/token
+CODEX_QUOTA_URL=https://chatgpt.com/backend-api/wham/usage
 CODEX_CALLBACK_HOST=127.0.0.1
 CODEX_CALLBACK_PORT=1455
 CODEX_DATABASE_PATH=/app/data/codex-accounts.sqlite
@@ -15,6 +16,10 @@ CODEX_ENCRYPTION_KEY=replace-with-a-long-random-secret
 ```
 
 `CODEX_ENCRYPTION_KEY` is required in production. Passwords, TOTP secrets and OAuth tokens are encrypted at rest. Keep the key outside the database and back it up separately.
+
+`CODEX_QUOTA_URL` configures the authenticated quota check: `GET` with `Authorization: Bearer <access token>` and optional `ChatGPT-Account-ID`. HTTP 2xx with a JSON object containing a non-empty string `plan_type` means valid; HTTP 401 means reauthentication; every other response, invalid JSON, timeout or network failure is indeterminate. This usage endpoint follows current internal Codex CLI behavior, is configurable, and is not a stable public API contract.
+
+The non-empty `plan_type` requirement is intentional: it identifies a typed usage payload; syntactically valid but unrelated/arbitrary JSON is not evidence of a valid account.
 
 ## API
 

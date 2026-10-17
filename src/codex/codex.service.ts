@@ -239,9 +239,6 @@ export class CodexService implements OnModuleDestroy {
         outcome: 'failed',
         reason: this.safeFailureMessage(error),
       };
-    } finally {
-      await this.closeBrowser();
-      this.closeCallbackServer();
     }
   }
 

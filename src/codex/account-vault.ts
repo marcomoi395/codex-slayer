@@ -66,8 +66,10 @@ export class AccountVault {
     const now = Date.now();
     const connectionId = record.connectionId ?? randomBytes(16).toString('hex');
     const existing = database
-      .prepare('SELECT connectionId, createdAt FROM accounts WHERE email = ?')
-      .get(email) as { connectionId: string; createdAt: number } | undefined;
+      .prepare('SELECT connectionId, createdAt, accessToken FROM accounts WHERE email = ?')
+      .get(email) as
+      | { connectionId: string; createdAt: number; accessToken: string | null }
+      | undefined;
     const id = existing?.connectionId ?? connectionId;
     const createdAt = existing?.createdAt ?? now;
     database
@@ -80,12 +82,12 @@ export class AccountVault {
           connectionId = excluded.connectionId,
           password = excluded.password,
           totpSecret = excluded.totpSecret,
-          accessToken = excluded.accessToken,
-          refreshToken = excluded.refreshToken,
-          idToken = excluded.idToken,
-          expiresAt = excluded.expiresAt,
-          scope = excluded.scope,
-          tokenType = excluded.tokenType,
+          accessToken = COALESCE(excluded.accessToken, accounts.accessToken),
+          refreshToken = COALESCE(excluded.refreshToken, accounts.refreshToken),
+          idToken = COALESCE(excluded.idToken, accounts.idToken),
+          expiresAt = COALESCE(excluded.expiresAt, accounts.expiresAt),
+          scope = COALESCE(excluded.scope, accounts.scope),
+          tokenType = COALESCE(excluded.tokenType, accounts.tokenType),
           updatedAt = excluded.updatedAt`,
       )
       .run(
@@ -111,7 +113,10 @@ export class AccountVault {
     return {
       email,
       connectionId: id,
-      status: record.accessToken === undefined ? 'pending' : 'authenticated',
+      status:
+        record.accessToken !== undefined || Boolean(existing?.accessToken)
+          ? 'authenticated'
+          : 'pending',
       createdAt,
       updatedAt: now,
     };

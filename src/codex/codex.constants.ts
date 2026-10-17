@@ -1,9 +1,12 @@
 export const CODEX_CONFIG = Symbol('CODEX_CONFIG');
 
+export const CODEX_QUOTA_DEFAULT_URL =
+  'https://chatgpt.com/backend-api/wham/usage';
+
 export const CODEX_DEFAULTS = {
   authorizationUrl: 'https://auth.openai.com/oauth/authorize',
   tokenUrl: 'https://auth.openai.com/oauth/token',
-  quotaUrl: 'https://chatgpt.com/backend-api/wham/usage',
+  quotaUrl: CODEX_QUOTA_DEFAULT_URL,
   scope: 'openid profile email offline_access',
   callbackHost: 'localhost',
   callbackPort: 1455,

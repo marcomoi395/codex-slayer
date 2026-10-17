@@ -1,5 +1,8 @@
-export const CODEX_QUOTA_DEFAULT_URL =
-  'https://chatgpt.com/backend-api/wham/usage';
+import { CODEX_QUOTA_DEFAULT_URL } from './codex.constants';
+
+export { CODEX_QUOTA_DEFAULT_URL } from './codex.constants';
+
+
 export const CODEX_QUOTA_DEFAULT_TIMEOUT_MS = 10_000;
 
 export type CodexQuotaClassification =
