@@ -21,7 +21,13 @@ export interface CodexQuotaClientOptions {
 }
 
 function isQuotaJson(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value) &&
+    typeof value.plan_type === 'string' &&
+    value.plan_type.trim().length > 0
+  );
 }
 
 export class CodexQuotaClient {

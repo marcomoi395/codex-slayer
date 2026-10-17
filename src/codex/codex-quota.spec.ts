@@ -12,10 +12,13 @@ describe('CodexQuotaClient', () => {
     requests.length = 0;
     const httpClient: CodexQuotaHttpClient = async (url, init) => {
       requests.push({ url: String(url), init });
-      return new Response(JSON.stringify({ plan: { usage: 1 } }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      });
+      return new Response(
+        JSON.stringify({ plan_type: 'plus', plan: { usage: 1 } }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      );
     };
     client = new CodexQuotaClient({ httpClient });
   });
@@ -80,6 +83,19 @@ describe('CodexQuotaClient', () => {
       'indeterminate',
     );
   });
+  it.each([{}, { usage: { used: 1 } }])(
+    'classifies quota-shaped JSON without plan_type as indeterminate',
+    async (body) => {
+      client = new CodexQuotaClient({
+        httpClient: async () =>
+          new Response(JSON.stringify(body), { status: 200 }),
+      });
+
+      await expect(
+        client.classify({ accessToken: 'access-token' }),
+      ).resolves.toBe('indeterminate');
+    },
+  );
 
   it('classifies network failures as indeterminate without exposing credentials', async () => {
     const accessToken = 'super-secret-access-token';
