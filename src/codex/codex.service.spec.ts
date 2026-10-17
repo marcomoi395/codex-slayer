@@ -1,9 +1,12 @@
 import { BadRequestException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import type { Browser } from 'playwright-core';
-import { AccountVault } from './account-vault';
 import { CodexService } from './codex.service';
 import type { CodexConfig } from './codex.config';
+
+const mockCamoufox = jest.fn();
+
+jest.mock('camoufox-js', () => ({ Camoufox: (...args: unknown[]) => mockCamoufox(...args) }));
+
 
 const config: CodexConfig = {
   clientId: 'codex-client-id',
@@ -264,6 +267,82 @@ describe('CodexService', () => {
       );
       await expect(first).resolves.toMatchObject({ total: 1, completed: 1 });
     } finally {
+      await batchService.onModuleDestroy();
+      vault.close();
+    }
+  });
+  it('continues after a browser launch failure and closes the next account browser', async () => {
+    const databasePath = `/tmp/codex-browser-continuation-${randomUUID()}.sqlite`;
+    const vault = new AccountVault(databasePath, 'test-only-encryption-key');
+    for (const email of ['a@example.com', 'b@example.com']) {
+      await vault.upsert({
+        email,
+        password: 'password',
+        totpSecret: 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ',
+      });
+    }
+    const batchService = new CodexService({
+      ...config,
+      databasePath,
+      encryptionKey: 'test-only-encryption-key',
+    });
+    let launches = 0;
+    let browserClosed = false;
+    let state = '';
+    let callbackCompletion: Promise<unknown> | undefined;
+    mockCamoufox.mockImplementation(async () => {
+      launches += 1;
+      if (launches === 1) throw new Error('browser launch failed');
+      const stages = ['email'];
+      const locator = (kind: string) => ({
+        waitFor: () => Promise.resolve(),
+        fill: () => Promise.resolve(),
+        click: () => {
+          if (kind === 'continue' && stages[0] === 'email') stages[0] = 'password';
+          else if (kind === 'continue' && stages[0] === 'password') stages[0] = 'totp';
+          else if (kind === 'continue' && stages[0] === 'totp') stages[0] = 'consent';
+          else if (kind === 'continue' && stages[0] === 'consent') {
+            callbackCompletion = batchService.handleCallback('authorization-code', state);
+          }
+          return Promise.resolve();
+        },
+      });
+      const page = {
+        goto: (url: string) => {
+          state = new URL(url).searchParams.get('state') ?? '';
+          return Promise.resolve();
+        },
+        url: () => 'https://auth.openai.com/log-in',
+        getByLabel: (name: RegExp) =>
+          locator(name.test('email') ? 'email' : name.test('password') ? 'password' : 'totp'),
+        getByRole: (_role: string, options: { name: RegExp | string }) =>
+          locator(options.name === 'Continue' || options.name instanceof RegExp ? 'continue' : 'totp'),
+      };
+      return {
+        newContext: async () => ({ newPage: async () => page }),
+        close: async () => { browserClosed = true; },
+      };
+    });
+    const originalFetch = global.fetch;
+    global.fetch = async () => new Response(JSON.stringify({
+      access_token: 'new-access-token',
+      refresh_token: 'new-refresh-token',
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+    try {
+      const result = await batchService.startBatchFlow();
+      await callbackCompletion;
+      expect(result.accounts).toEqual([
+        expect.objectContaining({ email: 'a@example.com', outcome: 'failed' }),
+        expect.objectContaining({ email: 'b@example.com', outcome: 'authenticated' }),
+      ]);
+      expect(launches).toBe(2);
+      expect(browserClosed).toBe(true);
+      expect(await vault.get((await vault.list())[1].connectionId)).toEqual(
+        expect.objectContaining({ email: 'b@example.com', accessToken: 'new-access-token' }),
+      );
+    } finally {
+      mockCamoufox.mockReset();
+      global.fetch = originalFetch;
       await batchService.onModuleDestroy();
       vault.close();
     }

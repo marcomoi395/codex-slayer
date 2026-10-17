@@ -1,3 +1,6 @@
+import { randomUUID } from 'node:crypto';
+import { CodexService } from './codex.service';
+
 import { BadRequestException } from '@nestjs/common';
 
 import { CodexController } from './codex.controller';
@@ -73,5 +76,29 @@ describe('CodexController batch API', () => {
 
     expect(() => controller.startBatch()).toThrow(BadRequestException);
     expect(startBatchFlow).not.toHaveBeenCalled();
+  });
+
+  it('rejects a second POST while the first vault read is pending', async () => {
+    const service = new CodexService({
+      clientId: 'client',
+      authorizationUrl: 'https://auth.openai.com/oauth/authorize',
+      tokenUrl: 'https://auth.openai.com/oauth/token',
+      scope: 'openid profile email offline_access',
+      callbackHost: '127.0.0.1',
+      callbackPort: 0,
+      callbackPath: '/auth/callback',
+      stateTtlMs: 600_000,
+      databasePath: `/tmp/codex-controller-overlap-${randomUUID()}.sqlite`,
+      encryptionKey: 'test-only-encryption-key',
+    });
+    const controller = new CodexController(service);
+    try {
+      expect(controller.startBatch()).toEqual({ started: true });
+      expect(() => controller.startBatch()).toThrow(BadRequestException);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(service.getStatus().batch?.active).toBe(false);
+    } finally {
+      await service.onModuleDestroy();
+    }
   });
 });
