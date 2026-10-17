@@ -38,6 +38,7 @@ describe('CodexQuotaClient', () => {
           Authorization: 'Bearer access-token',
           'ChatGPT-Account-ID': 'account-id',
         },
+        signal: expect.any(AbortSignal),
       },
     });
   });
@@ -107,6 +108,25 @@ describe('CodexQuotaClient', () => {
     });
 
     await expect(client.classify({ accessToken })).resolves.toBe('indeterminate');
+  });
+  it('classifies an aborted request as indeterminate', async () => {
+    client = new CodexQuotaClient({
+      timeoutMs: 1,
+      httpClient: async (_url, init) => {
+        expect(init?.signal).toBeInstanceOf(AbortSignal);
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            'abort',
+            () => reject(new Error('request timed out')),
+            { once: true },
+          );
+        });
+      },
+    });
+
+    await expect(
+      client.classify({ accessToken: 'access-token' }),
+    ).resolves.toBe('indeterminate');
   });
 
   it('uses a configured URL', async () => {
