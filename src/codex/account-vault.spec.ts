@@ -68,6 +68,56 @@ describe('AccountVault', () => {
     restarted.close();
   });
 
+  it('saves pending credentials, lists safe status, and reads credentials for a batch', async () => {
+    const vault = new AccountVault(databasePath, 'test-encryption-key');
+    const saved = await vault.upsert({
+      email: ' Pending@Example.com ',
+      password: 'pending-password',
+      totpSecret: 'pending-totp',
+    });
+
+    expect(saved.status).toBe('pending');
+    expect(await vault.list()).toEqual([
+      expect.objectContaining({
+        email: 'pending@example.com',
+        connectionId: saved.connectionId,
+        status: 'pending',
+      }),
+    ]);
+    expect(JSON.stringify(await vault.list())).not.toContain('pending-password');
+    expect(await vault.listCredentials(50)).toEqual([
+      expect.objectContaining({
+        connectionId: saved.connectionId,
+        email: 'pending@example.com',
+        password: 'pending-password',
+        totpSecret: 'pending-totp',
+        accessToken: undefined,
+      }),
+    ]);
+
+    const authenticated = await vault.upsert({
+      email: 'PENDING@example.com',
+      password: 'updated-password',
+      totpSecret: 'updated-totp',
+      accessToken: 'access-token',
+      refreshToken: 'refresh-token',
+    });
+    expect(authenticated).toEqual(
+      expect.objectContaining({
+        connectionId: saved.connectionId,
+        status: 'authenticated',
+      }),
+    );
+    expect(await vault.get(saved.connectionId)).toEqual(
+      expect.objectContaining({
+        email: 'pending@example.com',
+        accessToken: 'access-token',
+        refreshToken: 'refresh-token',
+      }),
+    );
+    vault.close();
+  });
+
   it('rejects vault access without an encryption key', async () => {
     const vault = new AccountVault(databasePath);
     await expect(vault.list()).rejects.toThrow(

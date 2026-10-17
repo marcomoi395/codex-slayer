@@ -18,9 +18,9 @@ CODEX_ENCRYPTION_KEY=replace-with-a-long-random-secret
 
 ## API
 
-- `POST /auth/codex/accounts`: start login with `{ "email", "password", "totpSecret" }`; response contains only `{ "started": true }`.
+- `POST /auth/codex/accounts`: start login with `{ "email", "password", "totpSecret" }`; credentials are encrypted before OAuth starts; response contains only `{ "started": true }`.
 - `GET /auth/codex/status`: read login state and safe status messages.
-- `GET /auth/codex/accounts`: list safe account summaries.
+- `GET /auth/codex/accounts`: list safe account summaries with `status: "pending"` or `"authenticated"`; secrets never appear.
 - `DELETE /auth/codex/accounts/:connectionId`: delete an account and its stored secrets/tokens.
 - `GET /auth/codex/callback`: receive and validate the OAuth callback.
 

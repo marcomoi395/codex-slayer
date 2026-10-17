@@ -88,13 +88,19 @@ export class CodexService implements OnModuleDestroy {
 
     let authorization: CodexAuthorization | undefined;
     try {
+      const email = credentials.email.trim().toLowerCase();
+      await this.accountVault.upsert({
+        email,
+        password: credentials.password,
+        totpSecret: credentials.totpSecret,
+      });
       this.updateStatus('validating', {
         active: true,
-        email: credentials.email.trim().toLowerCase(),
+        email,
         step: 'credentials',
         message: 'Validating Codex account credentials',
       });
-      authorization = await this.createAuthorizationLink(credentials.email);
+      authorization = await this.createAuthorizationLink(email);
 
       const pending = this.pending.get(authorization.state);
       if (!pending) throw new Error('Authorization state was not created');

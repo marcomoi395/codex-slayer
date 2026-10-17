@@ -39,6 +39,7 @@ export interface CodexAccountRequest {
 export interface CodexAccountSummary {
   email: string;
   connectionId?: string;
+  status: 'pending' | 'authenticated';
   createdAt?: number;
   updatedAt?: number;
 }
