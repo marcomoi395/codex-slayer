@@ -30,6 +30,7 @@ function isQuotaJson(value: unknown): value is Record<string, unknown> {
     typeof value === 'object' &&
     value !== null &&
     !Array.isArray(value) &&
+    'plan_type' in value &&
     typeof value.plan_type === 'string' &&
     value.plan_type.trim().length > 0
   );

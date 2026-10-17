@@ -131,7 +131,15 @@ describe('CodexQuotaClient', () => {
 
   it('uses a configured URL', async () => {
     const url = 'https://quota.example.test/usage';
-    client = new CodexQuotaClient({ url });
+    client = new CodexQuotaClient({
+      url,
+      httpClient: async (requestUrl, init) => {
+        requests.push({ url: requestUrl, init });
+        return new Response(JSON.stringify({ plan_type: 'plus' }), {
+          status: 200,
+        });
+      },
+    });
 
     await client.classify({ accessToken: 'access-token' });
 

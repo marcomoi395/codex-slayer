@@ -1,7 +1,9 @@
 import { BadRequestException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
+import { AccountVault } from './account-vault';
 import { CodexService } from './codex.service';
 import type { CodexConfig } from './codex.config';
+import type { Browser } from 'playwright-core';
 
 const mockCamoufox = jest.fn();
 
@@ -281,11 +283,7 @@ describe('CodexService', () => {
         totpSecret: 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ',
       });
     }
-    const batchService = new CodexService({
-      ...config,
-      databasePath,
-      encryptionKey: 'test-only-encryption-key',
-    });
+    let batchService: CodexService;
     let launches = 0;
     let browserClosed = false;
     let state = '';
@@ -323,6 +321,15 @@ describe('CodexService', () => {
         close: async () => { browserClosed = true; },
       };
     });
+    batchService = new CodexService(
+      {
+        ...config,
+        databasePath,
+        encryptionKey: 'test-only-encryption-key',
+      },
+      undefined,
+      async () => (await mockCamoufox()) as Browser,
+    );
     const originalFetch = global.fetch;
     global.fetch = async () => new Response(JSON.stringify({
       access_token: 'new-access-token',

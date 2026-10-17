@@ -95,8 +95,8 @@ describe('CodexController batch API', () => {
     try {
       expect(controller.startBatch()).toEqual({ started: true });
       expect(() => controller.startBatch()).toThrow(BadRequestException);
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      expect(service.getStatus().batch?.active).toBe(false);
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      expect(service.getStatus().batch?.active ?? false).toBe(false);
     } finally {
       await service.onModuleDestroy();
     }

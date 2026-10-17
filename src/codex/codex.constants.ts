@@ -1,5 +1,6 @@
 export const CODEX_CONFIG = Symbol('CODEX_CONFIG');
 
+export const CODEX_BROWSER_LAUNCHER = Symbol('CODEX_BROWSER_LAUNCHER');
 export const CODEX_QUOTA_DEFAULT_URL =
   'https://chatgpt.com/backend-api/wham/usage';
 

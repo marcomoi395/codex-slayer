@@ -3,6 +3,7 @@ import {
   Inject,
   Injectable,
   OnModuleDestroy,
+  Optional,
   ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -12,7 +13,7 @@ import { createServer, type Server } from 'node:http';
 import type { Browser, Locator, Page } from 'playwright-core';
 
 import { AccountVault, type AccountVaultRecord } from './account-vault';
-import { CODEX_CONFIG } from './codex.constants';
+import { CODEX_BROWSER_LAUNCHER, CODEX_CONFIG } from './codex.constants';
 import type { CodexConfig } from './codex.config';
 import { CodexQuotaClient, type CodexQuotaClassification } from './codex-quota';
 import type {
@@ -40,6 +41,7 @@ interface CallbackWaiter {
   resolve: (response: CodexCallbackResponse) => void;
   reject: (error: unknown) => void;
 }
+type BrowserLauncher = () => Promise<Browser>;
 
 type BrowserRoute =
   | 'email'
@@ -67,13 +69,18 @@ export class CodexService implements OnModuleDestroy {
   private callbackServer?: Server;
   private batchRunning = false;
   private batchStatus?: CodexBatchStatus;
+  private readonly browserLauncher: BrowserLauncher;
 
   constructor(
     @Inject(CODEX_CONFIG) private readonly config: CodexConfig,
     @Inject(CodexQuotaClient)
     private readonly quotaClient: Pick<CodexQuotaClient, 'classify'> =
       new CodexQuotaClient({ url: config.quotaUrl }),
+    @Optional()
+    @Inject(CODEX_BROWSER_LAUNCHER)
+    browserLauncher?: BrowserLauncher,
   ) {
+    this.browserLauncher = browserLauncher ?? (() => this.launchBrowser());
     this.accountVault = new AccountVault(
       config.databasePath ?? 'codex-accounts.sqlite',
       config.encryptionKey,
@@ -653,7 +660,7 @@ export class CodexService implements OnModuleDestroy {
   ): Promise<void> {
     let page: Page;
     try {
-      this.browser = await this.launchBrowser();
+      this.browser = await this.browserLauncher();
       const context = await this.browser.newContext();
       page = await context.newPage();
     } catch {

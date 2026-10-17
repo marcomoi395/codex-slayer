@@ -150,7 +150,9 @@ export class AccountVault {
         : database.prepare(
             'SELECT * FROM accounts ORDER BY email LIMIT ?',
           );
-    const rows = (limit === undefined ? statement.all() : statement.all(limit)) as StoredAccount[];
+    const rows = (limit === undefined
+      ? statement.all()
+      : statement.all(limit)) as unknown as StoredAccount[];
     return rows.map((stored) => this.toRecord(stored));
   }
 
