@@ -16,10 +16,14 @@ const api = {
   },
   accounts: () => api.request('/auth/codex/accounts'),
   status: () => api.request('/auth/codex/status'),
-  start: (credentials) =>
+  save: (credentials) =>
     api.request('/auth/codex/accounts', {
       method: 'POST',
       body: JSON.stringify(credentials),
+    }),
+  batch: () =>
+    api.request('/auth/codex/batch', {
+      method: 'POST',
     }),
   delete: (connectionId) =>
     api.request(`/auth/codex/accounts/${encodeURIComponent(connectionId)}`, {
@@ -33,7 +37,8 @@ function App() {
   const [form, setForm] = useState({ email: '', password: '', totpSecret: '' });
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [startingBatch, setStartingBatch] = useState(false);
   const [deleteCandidate, setDeleteCandidate] = useState('');
   const [deleting, setDeleting] = useState(false);
   const [refreshError, setRefreshError] = useState('');
@@ -66,20 +71,36 @@ function App() {
     };
   }, []);
 
-  const start = async (event) => {
+  const save = async (event) => {
     event.preventDefault();
-    setBusy(true);
+    setSaving(true);
     setMessage('');
     setError('');
     const credentials = form;
-    setForm({ email: credentials.email, password: '', totpSecret: '' });
     try {
-      await api.start(credentials);
-      setMessage('Login started. Watch the status panel.');
-    } catch (startError) {
-      setError(startError.message);
+      await api.save(credentials);
+      setForm({ email: credentials.email, password: '', totpSecret: '' });
+      setMessage('Account saved. Add another account or start the batch.');
+      const nextAccounts = await api.accounts();
+      setAccounts(nextAccounts);
+    } catch (saveError) {
+      setError(saveError.message);
     } finally {
-      setBusy(false);
+      setSaving(false);
+    }
+  };
+
+  const startBatch = async () => {
+    setStartingBatch(true);
+    setMessage('');
+    setError('');
+    try {
+      await api.batch();
+      setMessage('Batch started. Watch the progress panel.');
+    } catch (batchError) {
+      setError(batchError.message);
+    } finally {
+      setStartingBatch(false);
     }
   };
 
@@ -99,8 +120,10 @@ function App() {
     }
   };
 
-  const locked = busy || status.active;
-  const state = status.state ?? 'idle';
+  const batch = status.batch;
+  const locked =
+    saving || startingBatch || status.active || Boolean(batch?.active);
+  const state = status.state ?? (batch?.active ? 'batch' : 'idle');
 
   return (
     <main className="page-shell">
@@ -112,7 +135,7 @@ function App() {
         <div>
           <p className="eyebrow">CODEX AUTH TERMINAL // 8-BIT MODE</p>
           <h1>Codex Login</h1>
-          <p className="subtitle">One account. One secure sign-in flow.</p>
+          <p className="subtitle">Save accounts, then run one sequential batch.</p>
         </div>
       </header>
 
@@ -123,11 +146,11 @@ function App() {
               01
             </span>
             <div>
-              <p className="eyebrow">AUTHENTICATE</p>
+              <p className="eyebrow">SAVE ACCOUNT</p>
               <h2 id="login-heading">Account credentials</h2>
             </div>
           </div>
-          <form onSubmit={start}>
+          <form onSubmit={save}>
             <label htmlFor="email">Email address</label>
             <input
               autoComplete="username"
@@ -166,11 +189,10 @@ function App() {
               }
             />
             <p className="field-hint">
-              Base32 secret. The six-digit code is generated only during
-              sign-in.
+              Base32 secret. Saved encrypted; used only during batch sign-in.
             </p>
             <button className="primary-button" type="submit" disabled={locked}>
-              {locked ? 'LOGIN RUNNING…' : 'START CODEX LOGIN'}
+              {saving ? 'SAVING…' : 'SAVE ACCOUNT'}
             </button>
           </form>
           {message && (
@@ -212,6 +234,32 @@ function App() {
               STEP // {status.step.replaceAll('_', ' ')}
             </p>
           )}
+          {batch && (
+            <>
+              {batch.currentEmail && (
+                <p className="state-email">Current: {batch.currentEmail}</p>
+              )}
+              <dl className="batch-counts" aria-label="Batch progress">
+                <div><dt>PROCESSED</dt><dd>{batch.completed}</dd></div>
+                <div><dt>SELECTED</dt><dd>{batch.total}</dd></div>
+                <div><dt>SUCCESS</dt><dd>{batch.authenticated}</dd></div>
+                <div><dt>SKIPPED</dt><dd>{batch.skipped}</dd></div>
+                <div><dt>UNKNOWN</dt><dd>{batch.indeterminate}</dd></div>
+                <div><dt>FAILED</dt><dd>{batch.failed}</dd></div>
+              </dl>
+              {!batch.active && batch.accounts.length > 0 && (
+                <ul className="batch-report">
+                  {batch.accounts.map((account) => (
+                    <li key={`${account.email}-${account.outcome}`}>
+                      <span>{account.email}</span>
+                      <strong>{account.outcome}</strong>
+                      {account.reason && <small>{account.reason}</small>}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </>
+          )}
           {status.logs?.length > 0 ? (
             <ol className="log-list">
               {status.logs.map((log) => (
@@ -247,11 +295,21 @@ function App() {
             </h2>
           </div>
         </div>
+        <button
+          className="primary-button batch-button"
+          type="button"
+          disabled={locked || accounts.length === 0}
+          onClick={startBatch}
+        >
+          {startingBatch || batch?.active ? 'BATCH RUNNING…' : 'START BATCH'}
+        </button>
         {accounts.length ? (
           <ul className="account-list">
             {accounts.map((account) => (
               <li key={account.connectionId}>
-                <span className="account-email">{account.email}</span>
+                <span className="account-email">
+                  {account.email} <small>({account.status})</small>
+                </span>
                 {deleteCandidate === account.connectionId ? (
                   <div
                     className="delete-confirm"

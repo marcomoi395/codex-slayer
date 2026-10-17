@@ -18,10 +18,13 @@ CODEX_ENCRYPTION_KEY=replace-with-a-long-random-secret
 
 ## API
 
-- `POST /auth/codex/accounts`: start login with `{ "email", "password", "totpSecret" }`; credentials are encrypted before OAuth starts; response contains only `{ "started": true }`.
-- `GET /auth/codex/status`: read login state and safe status messages.
+- `POST /auth/codex/accounts`: save one account with `{ "email", "password", "totpSecret" }`; credentials are encrypted at rest and no browser login starts. Response contains only `{ "saved": true }`.
+- `POST /auth/codex/batch`: start a sequential batch for saved accounts. The response is immediate `{ "started": true }`; progress and the final report are read from `GET /auth/codex/status`.
+- `GET /auth/codex/status`: read safe login/batch state. During a batch, `batch` includes `active`, `currentEmail`, `total`, `completed`, `authenticated`, `skipped`, `indeterminate`, `failed`, and safe per-account `accounts` outcomes with optional reasons.
 - `GET /auth/codex/accounts`: list safe account summaries with `status: "pending"` or `"authenticated"`; secrets never appear.
 - `DELETE /auth/codex/accounts/:connectionId`: delete an account and its stored secrets/tokens.
 - `GET /auth/codex/callback`: receive and validate the OAuth callback.
+
+Batch startup errors are recorded in safe status logs. A second batch or login is rejected while another run is active.
 
 The login flow keeps PKCE, validates OAuth state and its TTL, allows one active login at a time, and closes browser/callback resources after completion or failure. CAPTCHA, email verification, phone verification and unsupported login steps stop for manual handling; the app does not bypass them.

@@ -1,8 +1,11 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   Post,
   Query,
@@ -25,8 +28,29 @@ export class CodexController {
     return this.codexService.getAccounts();
   }
   @Post('accounts')
-  startAccountFlow(@Body() credentials: CodexAccountRequest) {
-    return this.codexService.startAccountFlow(credentials);
+  saveAccount(@Body() credentials: CodexAccountRequest) {
+    return this.codexService.saveAccount(credentials);
+  }
+
+  @Post('batch')
+  @HttpCode(HttpStatus.ACCEPTED)
+  startBatch(@Query('limit') limit?: string): { started: true } {
+    const parsedLimit =
+      limit === undefined ? undefined : this.parseBatchLimit(limit);
+    const status = this.codexService.getStatus();
+    if (status.active || status.batch?.active) {
+      throw new BadRequestException('A Codex login flow is already active');
+    }
+    void this.codexService.startBatchFlow(parsedLimit).catch(() => undefined);
+    return { started: true };
+  }
+
+  private parseBatchLimit(limit: string): number {
+    const parsed = Number(limit);
+    if (!/^\d+$/.test(limit) || !Number.isSafeInteger(parsed)) {
+      throw new BadRequestException('Batch limit must be a non-negative integer');
+    }
+    return parsed;
   }
 
   @Delete('accounts/:connectionId')

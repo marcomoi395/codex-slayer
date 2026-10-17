@@ -107,6 +107,18 @@ export class CodexService implements OnModuleDestroy {
     }
   }
 
+  async saveAccount(
+    credentials: CodexAccountRequest,
+  ): Promise<{ saved: true }> {
+    this.validateAccountCredentials(credentials);
+    await this.accountVault.upsert({
+      email: credentials.email.trim().toLowerCase(),
+      password: credentials.password,
+      totpSecret: credentials.totpSecret,
+    });
+    return { saved: true };
+  }
+
   async startAccountFlow(
     credentials: CodexAccountRequest,
   ): Promise<{ started: true }> {
@@ -118,6 +130,7 @@ export class CodexService implements OnModuleDestroy {
     return { started: true };
   }
 
+
   async startBatchFlow(limit?: number): Promise<CodexBatchResult> {
     if (this.batchRunning || this.pending.size > 0 || this.status.active) {
       throw new BadRequestException('A Codex login flow is already active');
@@ -128,6 +141,12 @@ export class CodexService implements OnModuleDestroy {
       records = await this.accountVault.listCredentials(limit);
     } catch (error) {
       this.batchRunning = false;
+      this.updateStatus('batch_failed', {
+        active: false,
+        step: 'batch',
+        level: 'error',
+        message: `Codex account batch could not start: ${this.safeFailureMessage(error)}`,
+      });
       throw error;
     }
     const result: CodexBatchResult = {
