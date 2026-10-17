@@ -5,6 +5,7 @@ import { CODEX_CONFIG, CODEX_DEFAULTS } from './codex.constants';
 import type { CodexConfig } from './codex.config';
 import { CodexController } from './codex.controller';
 import { CodexService } from './codex.service';
+import { CodexQuotaClient } from './codex-quota';
 @Module({
   imports: [ConfigModule],
   controllers: [CodexController],
@@ -46,7 +47,15 @@ import { CodexService } from './codex.service';
       },
     },
     CodexService,
+    {
+      provide: CodexQuotaClient,
+      inject: [ConfigService],
+      useFactory: (configService: ConfigService) =>
+        new CodexQuotaClient({
+          url: configService.get<string>('CODEX_QUOTA_URL'),
+        }),
+    },
   ],
-  exports: [CodexService],
+  exports: [CodexService, CodexQuotaClient],
 })
 export class CodexModule {}
