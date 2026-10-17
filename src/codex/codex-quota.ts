@@ -1,5 +1,6 @@
 export const CODEX_QUOTA_DEFAULT_URL =
   'https://chatgpt.com/backend-api/wham/usage';
+export const CODEX_QUOTA_DEFAULT_TIMEOUT_MS = 10_000;
 
 export type CodexQuotaClassification =
   | 'valid'
@@ -18,6 +19,7 @@ export interface CodexQuotaHttpClient {
 export interface CodexQuotaClientOptions {
   url?: string;
   httpClient?: CodexQuotaHttpClient;
+  timeoutMs?: number;
 }
 
 function isQuotaJson(value: unknown): value is Record<string, unknown> {
@@ -33,11 +35,13 @@ function isQuotaJson(value: unknown): value is Record<string, unknown> {
 export class CodexQuotaClient {
   private readonly url: string;
   private readonly httpClient: CodexQuotaHttpClient;
+  private readonly timeoutMs: number;
 
   constructor(options: CodexQuotaClientOptions = {}) {
     this.url = options.url ?? CODEX_QUOTA_DEFAULT_URL;
     this.httpClient =
       options.httpClient ?? globalThis.fetch.bind(globalThis);
+    this.timeoutMs = options.timeoutMs ?? CODEX_QUOTA_DEFAULT_TIMEOUT_MS;
   }
 
   async classify(
@@ -66,6 +70,7 @@ export class CodexQuotaClient {
       const response = await this.httpClient(this.url, {
         method: 'GET',
         headers,
+        signal: AbortSignal.timeout(this.timeoutMs),
       });
       if (response.status === 401) return 'reauth-required';
       if (response.status < 200 || response.status >= 300) {

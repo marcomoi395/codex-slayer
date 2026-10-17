@@ -30,6 +30,9 @@ import { CodexQuotaClient } from './codex-quota';
           tokenUrl:
             configService.get<string>('CODEX_TOKEN_URL') ??
             CODEX_DEFAULTS.tokenUrl,
+          quotaUrl:
+            configService.get<string>('CODEX_QUOTA_URL') ??
+            CODEX_DEFAULTS.quotaUrl,
           scope: CODEX_DEFAULTS.scope,
           callbackHost:
             configService.get<string>('CODEX_CALLBACK_HOST') ??
