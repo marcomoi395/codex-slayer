@@ -24,8 +24,8 @@ The non-empty `plan_type` requirement is intentional: it identifies a typed usag
 ## API
 
 - `POST /auth/codex/accounts`: save one account with `{ "email", "password", "totpSecret" }`; credentials are encrypted at rest and no browser login starts. Response contains only `{ "saved": true }`.
-- `POST /auth/codex/batch`: start a sequential batch for saved accounts. The response is immediate `{ "started": true }`; progress and the final report are read from `GET /auth/codex/status`.
-- `GET /auth/codex/status`: read safe login/batch state. During a batch, `batch` includes `active`, `currentEmail`, `total`, `completed`, `authenticated`, `skipped`, `indeterminate`, `failed`, and safe per-account `accounts` outcomes with optional reasons.
+- `POST /auth/codex/batch`: start a sequential batch for all saved accounts. The response is immediate `{ "started": true, "runId": "…" }`; progress and the final report are read from `GET /auth/codex/status`.
+- `GET /auth/codex/status`: read safe login/batch state. During and after a batch, `batch` includes stable `runId`, `startedAt`, `completedAt` when terminal, `state` (`running`, `completed`, or `failed`), `active`, `currentEmail`, totals, and safe per-account outcomes with `completedAt` and optional reasons.
 - `GET /auth/codex/accounts`: list safe account summaries with `status: "pending"` or `"authenticated"`; secrets never appear.
 - `DELETE /auth/codex/accounts/:connectionId`: delete an account and its stored secrets/tokens.
 - `GET /auth/codex/callback`: receive and validate the OAuth callback.

@@ -138,13 +138,17 @@ export class CodexService implements OnModuleDestroy {
   }
 
 
-  async startBatchFlow(limit?: number): Promise<CodexBatchResult> {
+  async startBatchFlow(): Promise<CodexBatchResult> {
     if (this.batchRunning || this.pending.size > 0 || this.status.active) {
       throw new BadRequestException('A Codex login flow is already active');
     }
     this.batchRunning = true;
-    this.batchStatus = {
-      active: true,
+    const runId = randomUUID();
+    const startedAt = Date.now();
+    const result: CodexBatchResult = {
+      runId,
+      startedAt,
+      state: 'running',
       total: 0,
       completed: 0,
       authenticated: 0,
@@ -153,12 +157,15 @@ export class CodexService implements OnModuleDestroy {
       failed: 0,
       accounts: [],
     };
+    this.batchStatus = { ...result, active: true };
     let records: AccountVaultRecord[];
     try {
-      records = await this.accountVault.listCredentials(limit);
+      records = await this.accountVault.listCredentials();
     } catch (error) {
+      result.state = 'failed';
+      result.completedAt = Date.now();
       this.batchRunning = false;
-      this.batchStatus = undefined;
+      this.batchStatus = { ...result, active: false };
       this.updateStatus('batch_failed', {
         active: false,
         step: 'batch',
@@ -167,16 +174,8 @@ export class CodexService implements OnModuleDestroy {
       });
       throw error;
     }
-    const result: CodexBatchResult = {
-      total: records.length,
-      completed: 0,
-      authenticated: 0,
-      skipped: 0,
-      indeterminate: 0,
-      failed: 0,
-      accounts: [],
-    };
-    this.batchStatus = { active: true, ...result, accounts: [] };
+    result.total = records.length;
+    this.batchStatus = { ...result, active: true, accounts: [] };
     this.updateStatus('batch_started', {
       active: true,
       step: 'batch',
@@ -192,7 +191,7 @@ export class CodexService implements OnModuleDestroy {
           step: 'batch',
           message: 'Processing Codex account batch item',
         });
-        let accountResult: CodexBatchAccountResult;
+        let accountResult: Omit<CodexBatchAccountResult, 'completedAt'>;
         if (record.accessToken) {
           let classification: CodexQuotaClassification = 'indeterminate';
           try {
@@ -216,7 +215,7 @@ export class CodexService implements OnModuleDestroy {
         } else {
           accountResult = await this.runBatchAccount(record);
         }
-        result.accounts.push(accountResult);
+        result.accounts.push({ ...accountResult, completedAt: Date.now() });
         result.completed += 1;
         result[accountResult.outcome] += 1;
         this.batchStatus = {
@@ -227,21 +226,28 @@ export class CodexService implements OnModuleDestroy {
             : {}),
         };
       }
+      result.state = 'completed';
+      result.completedAt = Date.now();
       return { ...result, accounts: result.accounts.map((account) => ({ ...account })) };
+    } catch (error) {
+      result.state = 'failed';
+      result.completedAt = Date.now();
+      throw error;
     } finally {
       this.batchRunning = false;
       this.batchStatus = { ...result, active: false };
-      this.updateStatus('batch_completed', {
+      this.updateStatus(result.state === 'completed' ? 'batch_completed' : 'batch_failed', {
         active: false,
         step: 'batch',
-        message: `Codex account batch completed (${result.completed}/${result.total})`,
+        ...(result.state === 'failed' ? { level: 'error' } : {}),
+        message: `Codex account batch ${result.state} (${result.completed}/${result.total})`,
       });
     }
   }
 
   private async runBatchAccount(
     record: AccountVaultRecord,
-  ): Promise<CodexBatchAccountResult> {
+  ): Promise<Omit<CodexBatchAccountResult, 'completedAt'>> {
     this.updateStatus('batch_account', {
       active: true,
       email: record.email,

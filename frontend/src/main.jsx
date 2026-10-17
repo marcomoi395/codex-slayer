@@ -239,6 +239,11 @@ function App() {
               {batch.currentEmail && (
                 <p className="state-email">Current: {batch.currentEmail}</p>
               )}
+              <p className="quiet">
+                Run {batch.runId} · {batch.state} · started{' '}
+                {new Date(batch.startedAt).toLocaleString()}
+                {batch.completedAt && ` · completed ${new Date(batch.completedAt).toLocaleString()}`}
+              </p>
               <dl className="batch-counts" aria-label="Batch progress">
                 <div><dt>PROCESSED</dt><dd>{batch.completed}</dd></div>
                 <div><dt>SELECTED</dt><dd>{batch.total}</dd></div>
@@ -254,6 +259,7 @@ function App() {
                       <span>{account.email}</span>
                       <strong>{account.outcome}</strong>
                       {account.reason && <small>{account.reason}</small>}
+                      <small>Completed {new Date(account.completedAt).toLocaleString()}</small>
                     </li>
                   ))}
                 </ul>

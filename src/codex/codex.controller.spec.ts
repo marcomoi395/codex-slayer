@@ -28,18 +28,37 @@ describe('CodexController batch API', () => {
     expect(startAccountFlow).not.toHaveBeenCalled();
   });
 
-  it('starts a batch without waiting for its final result', () => {
+  it('starts a batch and returns its run identity without waiting for completion', () => {
     let resolveBatch!: (value: never) => void;
     const startBatchFlow = jest.fn(
       () => new Promise<never>((resolve) => (resolveBatch = resolve)),
     );
     const controller = controllerWith({
       startBatchFlow,
-      getStatus: () => ({ active: false, logs: [] }),
+      getStatus: jest
+        .fn()
+        .mockReturnValueOnce({ active: false, logs: [] })
+        .mockReturnValue({
+          active: false,
+          batch: {
+            runId: 'batch-run-1',
+            startedAt: 1,
+            state: 'running',
+            active: true,
+            total: 0,
+            completed: 0,
+            authenticated: 0,
+            skipped: 0,
+            indeterminate: 0,
+            failed: 0,
+            accounts: [],
+          },
+          logs: [],
+        }),
     });
 
-    expect(controller.startBatch()).toEqual({ started: true });
-    expect(startBatchFlow).toHaveBeenCalledWith(undefined);
+    expect(controller.startBatch()).toEqual({ started: true, runId: 'batch-run-1' });
+    expect(startBatchFlow).toHaveBeenCalledWith();
     resolveBatch(undefined as never);
   });
 
@@ -47,10 +66,29 @@ describe('CodexController batch API', () => {
     const startBatchFlow = jest.fn().mockRejectedValue(new Error('vault unavailable'));
     const controller = controllerWith({
       startBatchFlow,
-      getStatus: () => ({ active: false, logs: [] }),
+      getStatus: jest
+        .fn()
+        .mockReturnValueOnce({ active: false, logs: [] })
+        .mockReturnValue({
+          active: false,
+          batch: {
+            runId: 'batch-run-2',
+            startedAt: 1,
+            state: 'running',
+            active: true,
+            total: 0,
+            completed: 0,
+            authenticated: 0,
+            skipped: 0,
+            indeterminate: 0,
+            failed: 0,
+            accounts: [],
+          },
+          logs: [],
+        }),
     });
 
-    expect(controller.startBatch()).toEqual({ started: true });
+    expect(controller.startBatch()).toEqual({ started: true, runId: 'batch-run-2' });
     await new Promise<void>((resolve) => setImmediate(resolve));
   });
 
@@ -61,6 +99,9 @@ describe('CodexController batch API', () => {
       getStatus: () => ({
         active: false,
         batch: {
+          runId: 'batch-run-active',
+          startedAt: 1,
+          state: 'running',
           active: true,
           total: 1,
           completed: 0,
@@ -93,7 +134,7 @@ describe('CodexController batch API', () => {
     });
     const controller = new CodexController(service);
     try {
-      expect(controller.startBatch()).toEqual({ started: true });
+      expect(controller.startBatch()).toMatchObject({ started: true, runId: expect.any(String) });
       expect(() => controller.startBatch()).toThrow(BadRequestException);
       await new Promise<void>((resolve) => setTimeout(resolve, 20));
       expect(service.getStatus().batch?.active ?? false).toBe(false);

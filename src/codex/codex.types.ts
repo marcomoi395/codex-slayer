@@ -54,9 +54,16 @@ export interface CodexBatchAccountResult {
   email: string;
   outcome: CodexBatchAccountOutcome;
   reason?: string;
+  completedAt: number;
 }
 
+export type CodexBatchState = 'running' | 'completed' | 'failed';
+
 export interface CodexBatchResult {
+  runId: string;
+  startedAt: number;
+  completedAt?: number;
+  state: CodexBatchState;
   total: number;
   completed: number;
   authenticated: number;

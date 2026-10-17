@@ -217,6 +217,69 @@ describe('CodexService', () => {
     }
   });
 
+  it('keeps one run identity from live progress through its final result', async () => {
+    const databasePath = `/tmp/codex-batch-metadata-${randomUUID()}.sqlite`;
+    const vault = new AccountVault(databasePath, 'test-only-encryption-key');
+    await vault.upsert({
+      email: 'run@example.com',
+      password: 'password',
+      accessToken: 'run-token',
+    });
+    let finishClassification!: (result: 'valid') => void;
+    let markClassificationStarted!: () => void;
+    const classificationStarted = new Promise<void>((resolve) => {
+      markClassificationStarted = resolve;
+    });
+    const batchService = new CodexService(
+      { ...config, databasePath, encryptionKey: 'test-only-encryption-key' },
+      {
+        classify: () => {
+          markClassificationStarted();
+          return new Promise<'valid'>((resolve) => {
+            finishClassification = resolve;
+          });
+        },
+      },
+    );
+    try {
+      const completion = batchService.startBatchFlow();
+      await classificationStarted;
+      const progress = batchService.getStatus().batch!;
+      expect(progress.active).toBe(true);
+      expect(progress.currentEmail).toBe('run@example.com');
+      expect(progress.runId).toEqual(expect.any(String));
+      expect(progress.startedAt).toEqual(expect.any(Number));
+      expect(progress.state).toBe('running');
+      finishClassification('valid');
+
+      const result = await completion;
+      expect(result).toMatchObject({
+        runId: progress.runId,
+        startedAt: progress.startedAt,
+        state: 'completed',
+        total: 1,
+        completed: 1,
+      });
+      expect(result.completedAt).toEqual(expect.any(Number));
+      expect(result.completedAt).toBeGreaterThanOrEqual(result.startedAt);
+      expect(result.accounts[0]).toMatchObject({
+        email: 'run@example.com',
+        outcome: 'skipped',
+      });
+      expect(result.accounts[0].completedAt).toEqual(expect.any(Number));
+      expect(batchService.getStatus().batch).toMatchObject({
+        runId: result.runId,
+        startedAt: result.startedAt,
+        completedAt: result.completedAt,
+        state: 'completed',
+        active: false,
+      });
+    } finally {
+      await batchService.onModuleDestroy();
+      vault.close();
+    }
+  });
+
   it('keeps prior tokens when saving credentials for a reauthentication', async () => {
     const databasePath = `/tmp/codex-retained-token-${randomUUID()}.sqlite`;
     const vault = new AccountVault(databasePath, 'test-only-encryption-key');

@@ -34,24 +34,15 @@ export class CodexController {
 
   @Post('batch')
   @HttpCode(HttpStatus.ACCEPTED)
-  startBatch(@Query('limit') limit?: string): { started: true } {
-    const parsedLimit =
-      limit === undefined ? undefined : this.parseBatchLimit(limit);
+  startBatch(): { started: true; runId: string } {
     const status = this.codexService.getStatus();
     if (status.active || status.batch?.active) {
       throw new BadRequestException('A Codex login flow is already active');
     }
-    void this.codexService.startBatchFlow(parsedLimit).catch(() => undefined);
-    return { started: true };
+    void this.codexService.startBatchFlow().catch(() => undefined);
+    return { started: true, runId: this.codexService.getStatus().batch!.runId };
   }
 
-  private parseBatchLimit(limit: string): number {
-    const parsed = Number(limit);
-    if (!/^\d+$/.test(limit) || !Number.isSafeInteger(parsed)) {
-      throw new BadRequestException('Batch limit must be a non-negative integer');
-    }
-    return parsed;
-  }
 
   @Delete('accounts/:connectionId')
   async deleteAccount(
