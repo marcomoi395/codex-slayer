@@ -136,11 +136,22 @@ export class CodexService implements OnModuleDestroy {
       throw new BadRequestException('A Codex login flow is already active');
     }
     this.batchRunning = true;
+    this.batchStatus = {
+      active: true,
+      total: 0,
+      completed: 0,
+      authenticated: 0,
+      skipped: 0,
+      indeterminate: 0,
+      failed: 0,
+      accounts: [],
+    };
     let records: AccountVaultRecord[];
     try {
       records = await this.accountVault.listCredentials(limit);
     } catch (error) {
       this.batchRunning = false;
+      this.batchStatus = undefined;
       this.updateStatus('batch_failed', {
         active: false,
         step: 'batch',
@@ -239,9 +250,6 @@ export class CodexService implements OnModuleDestroy {
         outcome: 'failed',
         reason: this.safeFailureMessage(error),
       };
-    } finally {
-      await this.closeBrowser();
-      this.closeCallbackServer();
     }
   }
 

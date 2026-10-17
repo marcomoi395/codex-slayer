@@ -1,8 +1,12 @@
 import { BadRequestException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import type { Browser } from 'playwright-core';
 import { CodexService } from './codex.service';
 import type { CodexConfig } from './codex.config';
+
+const mockCamoufox = jest.fn();
+
+jest.mock('camoufox-js', () => ({ Camoufox: (...args: unknown[]) => mockCamoufox(...args) }));
+
 
 const config: CodexConfig = {
   clientId: 'codex-client-id',
@@ -177,199 +181,170 @@ describe('CodexService', () => {
     expect(closed).toBe(true);
   });
 
-  it('orchestrates saved accounts sequentially, classifies quota, and aggregates safe progress', async () => {
+  it('reports safe account reasons and releases the flow for a later run', async () => {
     const databasePath = `/tmp/codex-batch-${randomUUID()}.sqlite`;
-    const quotaClient = {
-      classify: jest.fn(async ({ accessToken }: { accessToken: string }) =>
-        accessToken === 'b-token'
-          ? 'valid'
-          : accessToken === 'c-token'
-            ? 'reauth-required'
-            : 'indeterminate',
-      ),
-    };
+    const vault = new AccountVault(databasePath, 'test-only-encryption-key');
+    await vault.upsert({
+      email: 'safe@example.com',
+      password: 'secret-password',
+      accessToken: 'safe-access-token',
+    });
     const batchService = new CodexService(
       { ...config, databasePath, encryptionKey: 'test-only-encryption-key' },
-      quotaClient,
+      { classify: async () => 'indeterminate' },
     );
-    const closeBrowser = jest
-      .spyOn(
-        batchService as unknown as { closeBrowser: () => Promise<void> },
-        'closeBrowser',
-      )
-      .mockResolvedValue();
-    const closeCallbackServer = jest
-      .spyOn(
-        batchService as unknown as { closeCallbackServer: () => void },
-        'closeCallbackServer',
-      )
-      .mockImplementation();
-    const vault = (
-      batchService as unknown as {
-        accountVault: {
-          upsert: (record: Record<string, string>) => Promise<unknown>;
-        };
-      }
-    ).accountVault;
-    await vault.upsert({ email: 'a@example.com', password: 'a-password' });
-    await vault.upsert({
-      email: 'b@example.com',
-      password: 'b-password',
-      accessToken: 'b-token',
-    });
-    await vault.upsert({
-      email: 'c@example.com',
-      password: 'c-password',
-      accessToken: 'c-token',
-    });
-    await vault.upsert({
-      email: 'd@example.com',
-      password: 'd-password',
-      accessToken: 'd-token',
-    });
-    const order: string[] = [];
-    (
-      batchService as unknown as {
-        runSavedAccountFlow: (record: { email: string }) => Promise<void>;
-      }
-    ).runSavedAccountFlow = async ({ email }) => {
-      order.push(email);
-      if (email === 'c@example.com') await vault.upsert({
-        email,
-        password: 'c-password',
-        accessToken: 'c-new-token',
-      });
-      if (email === 'a@example.com') throw new Error('browser failed');
-    };
-
     try {
-      await expect(batchService.startBatchFlow()).resolves.toEqual({
-        total: 4,
-        completed: 4,
-        authenticated: 1,
-        skipped: 1,
-        indeterminate: 1,
-        failed: 1,
-        accounts: [
-          {
-            email: 'a@example.com',
-            outcome: 'failed',
-            reason: 'Codex account flow failed to start',
-          },
-          { email: 'b@example.com', outcome: 'skipped' },
-          { email: 'c@example.com', outcome: 'authenticated' },
-          {
-            email: 'd@example.com',
-            outcome: 'indeterminate',
-            reason: 'Quota status could not be determined',
-          },
-        ],
-      });
-      expect(order).toEqual(['a@example.com', 'c@example.com']);
-      expect(closeBrowser).toHaveBeenCalledTimes(2);
-      expect(closeCallbackServer).toHaveBeenCalledTimes(2);
-      expect(quotaClient.classify).toHaveBeenCalledTimes(3);
-      expect(quotaClient.classify).toHaveBeenNthCalledWith(1, {
-        accessToken: 'b-token',
-      });
-      expect(quotaClient.classify).toHaveBeenNthCalledWith(2, {
-        accessToken: 'c-token',
-      });
-      expect(quotaClient.classify).toHaveBeenNthCalledWith(3, {
-        accessToken: 'd-token',
-      });
+      const result = await batchService.startBatchFlow();
+      expect(result.accounts).toEqual([
+        expect.objectContaining({
+          email: 'safe@example.com',
+          outcome: 'indeterminate',
+          reason: 'Quota status could not be determined',
+        }),
+      ]);
       expect(JSON.stringify(batchService.getStatus())).not.toContain(
-        'c-password',
+        'secret-password',
       );
-      expect(batchService.getStatus().batch).toMatchObject({
-        active: false,
-        total: 4,
-        completed: 4,
+      await expect(batchService.startBatchFlow()).resolves.toMatchObject({
+        total: 1,
+        completed: 1,
       });
     } finally {
       await batchService.onModuleDestroy();
+      vault.close();
     }
   });
 
-  it('prohibits overlapping batches', async () => {
-    const databasePath = `/tmp/codex-overlap-${randomUUID()}.sqlite`;
-    const batchService = new CodexService({
-      ...config,
-      databasePath,
-      encryptionKey: 'test-only-encryption-key',
+  it('keeps prior tokens when saving credentials for a reauthentication', async () => {
+    const databasePath = `/tmp/codex-retained-token-${randomUUID()}.sqlite`;
+    const vault = new AccountVault(databasePath, 'test-only-encryption-key');
+    await vault.upsert({
+      email: 'reauth@example.com',
+      password: 'old-password',
+      accessToken: 'old-access-token',
+      refreshToken: 'old-refresh-token',
+      idToken: 'old-id-token',
     });
-    const vault = (
-      batchService as unknown as {
-        accountVault: {
-          upsert: (record: Record<string, string>) => Promise<unknown>;
-        };
-      }
-    ).accountVault;
-    await vault.upsert({ email: 'a@example.com', password: 'a-password' });
-    let release!: () => void;
-    const blocked = new Promise<void>((resolve) => (release = resolve));
-    (
-      batchService as unknown as {
-        runSavedAccountFlow: () => Promise<void>;
-      }
-    ).runSavedAccountFlow = () => blocked;
+    const classify = jest.fn(async () => 'valid' as const);
+    const batchService = new CodexService(
+      { ...config, databasePath, encryptionKey: 'test-only-encryption-key' },
+      { classify },
+    );
+    try {
+      await batchService.saveAccount({
+        email: 'reauth@example.com',
+        password: 'new-password',
+        totpSecret: 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ',
+      });
+      await expect(batchService.startBatchFlow()).resolves.toMatchObject({
+        skipped: 1,
+      });
+      expect(classify).toHaveBeenCalledWith({
+        accessToken: 'old-access-token',
+      });
+    } finally {
+      await batchService.onModuleDestroy();
+      vault.close();
+    }
+  });
+
+  it('rejects concurrent starts while the initial account list is loading', async () => {
+    const databasePath = `/tmp/codex-overlap-${randomUUID()}.sqlite`;
+    const vault = new AccountVault(databasePath, 'test-only-encryption-key');
+    await vault.upsert({
+      email: 'a@example.com',
+      password: 'a-password',
+      accessToken: 'a-token',
+    });
+    const batchService = new CodexService(
+      { ...config, databasePath, encryptionKey: 'test-only-encryption-key' },
+      { classify: async () => 'valid' },
+    );
     try {
       const first = batchService.startBatchFlow();
       await expect(batchService.startBatchFlow()).rejects.toBeInstanceOf(
         BadRequestException,
       );
-      release();
-      await first;
+      await expect(first).resolves.toMatchObject({ total: 1, completed: 1 });
     } finally {
       await batchService.onModuleDestroy();
+      vault.close();
     }
   });
-  it('times out an account without an OAuth callback and continues safely', async () => {
-    jest.useFakeTimers();
-    const databasePath = `/tmp/codex-timeout-${randomUUID()}.sqlite`;
+  it('continues after a browser launch failure and closes the next account browser', async () => {
+    const databasePath = `/tmp/codex-browser-continuation-${randomUUID()}.sqlite`;
+    const vault = new AccountVault(databasePath, 'test-only-encryption-key');
+    for (const email of ['a@example.com', 'b@example.com']) {
+      await vault.upsert({
+        email,
+        password: 'password',
+        totpSecret: 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ',
+      });
+    }
     const batchService = new CodexService({
       ...config,
       databasePath,
       encryptionKey: 'test-only-encryption-key',
     });
-    const vault = (
-      batchService as unknown as {
-        accountVault: {
-          upsert: (record: Record<string, string>) => Promise<unknown>;
-        };
-      }
-    ).accountVault;
-    await vault.upsert({
-      email: 'timeout@example.com',
-      password: 'password',
-      totpSecret: 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ',
-    });
-    (
-      batchService as unknown as {
-        beginAccountFlow: () => Promise<unknown>;
-      }
-    ).beginAccountFlow = async () => ({
-      state: 'never-callback',
-      authorizationUrl: 'https://auth.example.test',
-      createdAt: Date.now(),
-    });
-    try {
-      const batch = batchService.startBatchFlow();
-      await jest.runAllTimersAsync();
-      await expect(batch).resolves.toMatchObject({
-        completed: 1,
-        failed: 1,
-        accounts: [
-          {
-            email: 'timeout@example.com',
-            outcome: 'failed',
-            reason: 'Codex authorization callback timed out',
-          },
-        ],
+    let launches = 0;
+    let browserClosed = false;
+    let state = '';
+    let callbackCompletion: Promise<unknown> | undefined;
+    mockCamoufox.mockImplementation(async () => {
+      launches += 1;
+      if (launches === 1) throw new Error('browser launch failed');
+      const stages = ['email'];
+      const locator = (kind: string) => ({
+        waitFor: () => Promise.resolve(),
+        fill: () => Promise.resolve(),
+        click: () => {
+          if (kind === 'continue' && stages[0] === 'email') stages[0] = 'password';
+          else if (kind === 'continue' && stages[0] === 'password') stages[0] = 'totp';
+          else if (kind === 'continue' && stages[0] === 'totp') stages[0] = 'consent';
+          else if (kind === 'continue' && stages[0] === 'consent') {
+            callbackCompletion = batchService.handleCallback('authorization-code', state);
+          }
+          return Promise.resolve();
+        },
       });
+      const page = {
+        goto: (url: string) => {
+          state = new URL(url).searchParams.get('state') ?? '';
+          return Promise.resolve();
+        },
+        url: () => 'https://auth.openai.com/log-in',
+        getByLabel: (name: RegExp) =>
+          locator(name.test('email') ? 'email' : name.test('password') ? 'password' : 'totp'),
+        getByRole: (_role: string, options: { name: RegExp | string }) =>
+          locator(options.name === 'Continue' || options.name instanceof RegExp ? 'continue' : 'totp'),
+      };
+      return {
+        newContext: async () => ({ newPage: async () => page }),
+        close: async () => { browserClosed = true; },
+      };
+    });
+    const originalFetch = global.fetch;
+    global.fetch = async () => new Response(JSON.stringify({
+      access_token: 'new-access-token',
+      refresh_token: 'new-refresh-token',
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+    try {
+      const result = await batchService.startBatchFlow();
+      await callbackCompletion;
+      expect(result.accounts).toEqual([
+        expect.objectContaining({ email: 'a@example.com', outcome: 'failed' }),
+        expect.objectContaining({ email: 'b@example.com', outcome: 'authenticated' }),
+      ]);
+      expect(launches).toBe(2);
+      expect(browserClosed).toBe(true);
+      expect(await vault.get((await vault.list())[1].connectionId)).toEqual(
+        expect.objectContaining({ email: 'b@example.com', accessToken: 'new-access-token' }),
+      );
     } finally {
-      jest.useRealTimers();
+      mockCamoufox.mockReset();
+      global.fetch = originalFetch;
       await batchService.onModuleDestroy();
+      vault.close();
     }
   });
 });

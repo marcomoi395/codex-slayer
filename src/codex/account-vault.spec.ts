@@ -118,6 +118,38 @@ describe('AccountVault', () => {
     vault.close();
   });
 
+  it('retains access, refresh, and ID tokens during a credential-only upsert', async () => {
+    const vault = new AccountVault(databasePath, 'test-encryption-key');
+    await vault.upsert({
+      email: 'reauth@example.com',
+      password: 'old-password',
+      accessToken: 'old-access-token',
+      refreshToken: 'old-refresh-token',
+      idToken: 'old-id-token',
+      expiresAt: 1234,
+      scope: 'offline_access',
+      tokenType: 'Bearer',
+    });
+
+    await vault.upsert({
+      email: 'reauth@example.com',
+      password: 'new-password',
+    });
+
+    expect(await vault.listCredentials()).toEqual([
+      expect.objectContaining({
+        password: 'new-password',
+        accessToken: 'old-access-token',
+        refreshToken: 'old-refresh-token',
+        idToken: 'old-id-token',
+        expiresAt: 1234,
+        scope: 'offline_access',
+        tokenType: 'Bearer',
+      }),
+    ]);
+    vault.close();
+  });
+
   it('rejects vault access without an encryption key', async () => {
     const vault = new AccountVault(databasePath);
     await expect(vault.list()).rejects.toThrow(
