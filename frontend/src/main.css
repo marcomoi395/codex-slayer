@@ -234,6 +234,54 @@ input:focus {
   color: var(--cyan);
   text-transform: uppercase;
 }
+.batch-counts {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: 18px 0 0;
+}
+.batch-counts div {
+  padding: 7px;
+  border: 1px solid #403a56;
+  text-align: center;
+}
+.batch-counts dt {
+  color: var(--muted);
+  font-size: 13px;
+}
+.batch-counts dd {
+  margin: 4px 0 0;
+  color: var(--green);
+  font-size: 24px;
+}
+.batch-report {
+  display: grid;
+  gap: 6px;
+  margin: 18px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 18px;
+}
+.batch-report li {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 8px;
+  border-top: 1px solid #403a56;
+  padding-top: 6px;
+}
+.batch-report strong {
+  color: var(--cyan);
+  text-transform: uppercase;
+}
+.batch-report small {
+  grid-column: 1 / -1;
+  color: #ffdce0;
+}
+.batch-button {
+  width: 100%;
+  margin: 0 0 14px;
+}
+
 .log-list {
   display: grid;
   gap: 7px;
