@@ -44,6 +44,33 @@ export interface CodexAccountSummary {
   updatedAt?: number;
 }
 
+export type CodexBatchAccountOutcome =
+  | 'authenticated'
+  | 'skipped'
+  | 'indeterminate'
+  | 'failed';
+
+export interface CodexBatchAccountResult {
+  email: string;
+  outcome: CodexBatchAccountOutcome;
+  reason?: string;
+}
+
+export interface CodexBatchResult {
+  total: number;
+  completed: number;
+  authenticated: number;
+  skipped: number;
+  indeterminate: number;
+  failed: number;
+  accounts: CodexBatchAccountResult[];
+}
+
+export interface CodexBatchStatus extends CodexBatchResult {
+  active: boolean;
+  currentEmail?: string;
+}
+
 export interface CodexStatusLog {
   at: number;
   message: string;
@@ -55,5 +82,6 @@ export interface CodexStatus {
   state?: string;
   email?: string;
   step?: string;
+  batch?: CodexBatchStatus;
   logs: CodexStatusLog[];
 }
