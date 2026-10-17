@@ -142,10 +142,19 @@ describe('CodexService', () => {
         password: 'password-value',
         totpSecret: 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ',
       });
+      expect(await testService.getAccounts()).toEqual([
+        expect.objectContaining({
+          email: 'operator@example.com',
+          status: 'pending',
+        }),
+      ]);
       await callbackCompletion;
       expect(testService.getStatus().state).toBe('completed');
       expect(await testService.getAccounts()).toEqual([
-        expect.objectContaining({ email: 'operator@example.com' }),
+        expect.objectContaining({
+          email: 'operator@example.com',
+          status: 'authenticated',
+        }),
       ]);
       expect(filledValues).toEqual(
         expect.arrayContaining([
