@@ -176,4 +176,200 @@ describe('CodexService', () => {
     }
     expect(closed).toBe(true);
   });
+
+  it('orchestrates saved accounts sequentially, classifies quota, and aggregates safe progress', async () => {
+    const databasePath = `/tmp/codex-batch-${randomUUID()}.sqlite`;
+    const quotaClient = {
+      classify: jest.fn(async ({ accessToken }: { accessToken: string }) =>
+        accessToken === 'b-token'
+          ? 'valid'
+          : accessToken === 'c-token'
+            ? 'reauth-required'
+            : 'indeterminate',
+      ),
+    };
+    const batchService = new CodexService(
+      { ...config, databasePath, encryptionKey: 'test-only-encryption-key' },
+      quotaClient,
+    );
+    const closeBrowser = jest
+      .spyOn(
+        batchService as unknown as { closeBrowser: () => Promise<void> },
+        'closeBrowser',
+      )
+      .mockResolvedValue();
+    const closeCallbackServer = jest
+      .spyOn(
+        batchService as unknown as { closeCallbackServer: () => void },
+        'closeCallbackServer',
+      )
+      .mockImplementation();
+    const vault = (
+      batchService as unknown as {
+        accountVault: {
+          upsert: (record: Record<string, string>) => Promise<unknown>;
+        };
+      }
+    ).accountVault;
+    await vault.upsert({ email: 'a@example.com', password: 'a-password' });
+    await vault.upsert({
+      email: 'b@example.com',
+      password: 'b-password',
+      accessToken: 'b-token',
+    });
+    await vault.upsert({
+      email: 'c@example.com',
+      password: 'c-password',
+      accessToken: 'c-token',
+    });
+    await vault.upsert({
+      email: 'd@example.com',
+      password: 'd-password',
+      accessToken: 'd-token',
+    });
+    const order: string[] = [];
+    (
+      batchService as unknown as {
+        runSavedAccountFlow: (record: { email: string }) => Promise<void>;
+      }
+    ).runSavedAccountFlow = async ({ email }) => {
+      order.push(email);
+      if (email === 'c@example.com') await vault.upsert({
+        email,
+        password: 'c-password',
+        accessToken: 'c-new-token',
+      });
+      if (email === 'a@example.com') throw new Error('browser failed');
+    };
+
+    try {
+      await expect(batchService.startBatchFlow()).resolves.toEqual({
+        total: 4,
+        completed: 4,
+        authenticated: 1,
+        skipped: 1,
+        indeterminate: 1,
+        failed: 1,
+        accounts: [
+          {
+            email: 'a@example.com',
+            outcome: 'failed',
+            reason: 'Codex account flow failed to start',
+          },
+          { email: 'b@example.com', outcome: 'skipped' },
+          { email: 'c@example.com', outcome: 'authenticated' },
+          {
+            email: 'd@example.com',
+            outcome: 'indeterminate',
+            reason: 'Quota status could not be determined',
+          },
+        ],
+      });
+      expect(order).toEqual(['a@example.com', 'c@example.com']);
+      expect(closeBrowser).toHaveBeenCalledTimes(2);
+      expect(closeCallbackServer).toHaveBeenCalledTimes(2);
+      expect(quotaClient.classify).toHaveBeenCalledTimes(3);
+      expect(quotaClient.classify).toHaveBeenNthCalledWith(1, {
+        accessToken: 'b-token',
+      });
+      expect(quotaClient.classify).toHaveBeenNthCalledWith(2, {
+        accessToken: 'c-token',
+      });
+      expect(quotaClient.classify).toHaveBeenNthCalledWith(3, {
+        accessToken: 'd-token',
+      });
+      expect(JSON.stringify(batchService.getStatus())).not.toContain(
+        'c-password',
+      );
+      expect(batchService.getStatus().batch).toMatchObject({
+        active: false,
+        total: 4,
+        completed: 4,
+      });
+    } finally {
+      await batchService.onModuleDestroy();
+    }
+  });
+
+  it('prohibits overlapping batches', async () => {
+    const databasePath = `/tmp/codex-overlap-${randomUUID()}.sqlite`;
+    const batchService = new CodexService({
+      ...config,
+      databasePath,
+      encryptionKey: 'test-only-encryption-key',
+    });
+    const vault = (
+      batchService as unknown as {
+        accountVault: {
+          upsert: (record: Record<string, string>) => Promise<unknown>;
+        };
+      }
+    ).accountVault;
+    await vault.upsert({ email: 'a@example.com', password: 'a-password' });
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => (release = resolve));
+    (
+      batchService as unknown as {
+        runSavedAccountFlow: () => Promise<void>;
+      }
+    ).runSavedAccountFlow = () => blocked;
+    try {
+      const first = batchService.startBatchFlow();
+      await expect(batchService.startBatchFlow()).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      release();
+      await first;
+    } finally {
+      await batchService.onModuleDestroy();
+    }
+  });
+  it('times out an account without an OAuth callback and continues safely', async () => {
+    jest.useFakeTimers();
+    const databasePath = `/tmp/codex-timeout-${randomUUID()}.sqlite`;
+    const batchService = new CodexService({
+      ...config,
+      databasePath,
+      encryptionKey: 'test-only-encryption-key',
+    });
+    const vault = (
+      batchService as unknown as {
+        accountVault: {
+          upsert: (record: Record<string, string>) => Promise<unknown>;
+        };
+      }
+    ).accountVault;
+    await vault.upsert({
+      email: 'timeout@example.com',
+      password: 'password',
+      totpSecret: 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ',
+    });
+    (
+      batchService as unknown as {
+        beginAccountFlow: () => Promise<unknown>;
+      }
+    ).beginAccountFlow = async () => ({
+      state: 'never-callback',
+      authorizationUrl: 'https://auth.example.test',
+      createdAt: Date.now(),
+    });
+    try {
+      const batch = batchService.startBatchFlow();
+      await jest.runAllTimersAsync();
+      await expect(batch).resolves.toMatchObject({
+        completed: 1,
+        failed: 1,
+        accounts: [
+          {
+            email: 'timeout@example.com',
+            outcome: 'failed',
+            reason: 'Codex authorization callback timed out',
+          },
+        ],
+      });
+    } finally {
+      jest.useRealTimers();
+      await batchService.onModuleDestroy();
+    }
+  });
 });
