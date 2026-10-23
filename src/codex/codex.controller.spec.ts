@@ -57,8 +57,8 @@ describe('CodexController batch API', () => {
         }),
     });
 
-    expect(controller.startBatch()).toEqual({ started: true, runId: 'batch-run-1' });
-    expect(startBatchFlow).toHaveBeenCalledWith();
+    expect(controller.startBatch(['account-1'])).toEqual({ started: true, runId: 'batch-run-1' });
+    expect(startBatchFlow).toHaveBeenCalledWith(['account-1']);
     resolveBatch(undefined as never);
   });
 
@@ -88,7 +88,7 @@ describe('CodexController batch API', () => {
         }),
     });
 
-    expect(controller.startBatch()).toEqual({ started: true, runId: 'batch-run-2' });
+    expect(controller.startBatch(['account-1'])).toEqual({ started: true, runId: 'batch-run-2' });
     await new Promise<void>((resolve) => setImmediate(resolve));
   });
 
@@ -115,7 +115,7 @@ describe('CodexController batch API', () => {
       }),
     });
 
-    expect(() => controller.startBatch()).toThrow(BadRequestException);
+    expect(() => controller.startBatch(['account-1'])).toThrow(BadRequestException);
     expect(startBatchFlow).not.toHaveBeenCalled();
   });
 
@@ -134,8 +134,8 @@ describe('CodexController batch API', () => {
     });
     const controller = new CodexController(service);
     try {
-      expect(controller.startBatch()).toMatchObject({ started: true, runId: expect.any(String) });
-      expect(() => controller.startBatch()).toThrow(BadRequestException);
+      expect(controller.startBatch(['account-1'])).toMatchObject({ started: true, runId: expect.any(String) });
+      expect(() => controller.startBatch(['account-1'])).toThrow(BadRequestException);
       await new Promise<void>((resolve) => setTimeout(resolve, 20));
       expect(service.getStatus().batch?.active ?? false).toBe(false);
     } finally {

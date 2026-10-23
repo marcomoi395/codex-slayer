@@ -24,11 +24,17 @@ The non-empty `plan_type` requirement is intentional: it identifies a typed usag
 ## API
 
 - `POST /auth/codex/accounts`: save one account with `{ "email", "password", "totpSecret" }`; credentials are encrypted at rest and no browser login starts. Response contains only `{ "saved": true }`.
-- `POST /auth/codex/batch`: start a sequential batch for all saved accounts. The response is immediate `{ "started": true, "runId": "…" }`; progress and the final report are read from `GET /auth/codex/status`.
+- `POST /auth/codex/batch`: start a sequential batch for selected saved accounts with `{ "connectionIds": ["…"] }`. The response is immediate `{ "started": true, "runId": "…" }`; progress and the final report are read from `GET /auth/codex/status`.
 - `GET /auth/codex/status`: read safe login/batch state. During and after a batch, `batch` includes stable `runId`, `startedAt`, `completedAt` when terminal, `state` (`running`, `completed`, or `failed`), `active`, `currentEmail`, totals, and safe per-account outcomes with `completedAt` and optional reasons.
 - `GET /auth/codex/accounts`: list safe account summaries with `status: "pending"` or `"authenticated"`; secrets never appear.
 - `DELETE /auth/codex/accounts/:connectionId`: delete an account and its stored secrets/tokens.
 - `GET /auth/codex/callback`: receive and validate the OAuth callback.
+- `GET /auth/codex/accounts/export`: download one plaintext `email|password|TOTP secret` row per account.
+- `GET /auth/codex/accounts/credentials/export`: download authenticated account tokens as a JSON array of `{ "accessToken", "refreshToken", "idToken", "email" }` objects.
+- `POST /auth/codex/accounts/import`: import `{ "content": "email|password|TOTP secret\\n…" }`; matching emails are updated. Every non-empty row must contain exactly three valid fields; malformed input is rejected before saving.
+
+Exported files are unencrypted and expose passwords and TOTP secrets. Store and transfer them accordingly.
+Token export files contain bearer credentials and are plaintext. Store and transfer them securely.
 
 Batch startup errors are recorded in safe status logs. A second batch or login is rejected while another run is active.
 

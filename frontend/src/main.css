@@ -126,6 +126,10 @@ p {
   background: var(--panel);
   box-shadow: 6px 6px 0 #080711;
 }
+.status-panel {
+  max-height: 620px;
+  overflow-y: auto;
+}
 .panel-heading {
   display: flex;
   align-items: center;
@@ -332,6 +336,30 @@ input:focus {
 .accounts-panel .panel-heading {
   margin-bottom: 14px;
 }
+.vault-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.secondary-button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 7px 10px;
+  border: 2px solid var(--border);
+  background: transparent;
+  color: #eee9fa;
+  font: 9px 'Press Start 2P', monospace;
+  cursor: pointer;
+}
+.secondary-button:hover {
+  border-color: var(--cyan);
+  color: var(--cyan);
+}
+.file-button input {
+  display: none;
+}
 .count {
   display: inline-grid;
   place-items: center;
@@ -350,6 +378,13 @@ input:focus {
   margin: 0;
   padding: 0;
   list-style: none;
+}
+.account-checkbox {
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  margin: 0 2px 0 0;
+  accent-color: var(--cyan);
 }
 .account-list li {
   display: flex;

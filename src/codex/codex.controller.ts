@@ -4,6 +4,7 @@ import {
   Controller,
   Delete,
   Get,
+  Header,
   HttpCode,
   HttpStatus,
   Param,
@@ -27,6 +28,26 @@ export class CodexController {
   getAccounts() {
     return this.codexService.getAccounts();
   }
+  @Get('accounts/export')
+  @Header('Content-Type', 'text/plain; charset=utf-8')
+  @Header('Content-Disposition', 'attachment; filename="codex-accounts.txt"')
+  @Header('Cache-Control', 'no-store')
+  exportAccounts(): Promise<string> {
+    return this.codexService.exportAccounts();
+  }
+  @Get('accounts/credentials/export')
+  @Header('Content-Type', 'application/json; charset=utf-8')
+  @Header('Content-Disposition', 'attachment; filename="codex-credentials.json"')
+  @Header('Cache-Control', 'no-store')
+  exportCredentials(): Promise<string> {
+    return this.codexService.exportCredentials();
+  }
+
+  @Post('accounts/import')
+  importAccounts(@Body('content') content: string) {
+    return this.codexService.importAccounts(content);
+  }
+
   @Post('accounts')
   saveAccount(@Body() credentials: CodexAccountRequest) {
     return this.codexService.saveAccount(credentials);
@@ -34,12 +55,21 @@ export class CodexController {
 
   @Post('batch')
   @HttpCode(HttpStatus.ACCEPTED)
-  startBatch(): { started: true; runId: string } {
+  startBatch(
+    @Body('connectionIds') connectionIds: string[],
+  ): { started: true; runId: string } {
+    if (
+      !Array.isArray(connectionIds) ||
+      connectionIds.length === 0 ||
+      connectionIds.some((id) => typeof id !== 'string' || !id)
+    ) {
+      throw new BadRequestException('Select at least one Codex account');
+    }
     const status = this.codexService.getStatus();
     if (status.active || status.batch?.active) {
       throw new BadRequestException('A Codex login flow is already active');
     }
-    void this.codexService.startBatchFlow().catch(() => undefined);
+    void this.codexService.startBatchFlow(connectionIds).catch(() => undefined);
     return { started: true, runId: this.codexService.getStatus().batch!.runId };
   }
 

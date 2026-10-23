@@ -107,6 +107,55 @@ export class CodexService implements OnModuleDestroy {
   getAccounts(): Promise<CodexAccountSummary[]> {
     return this.accountVault.list();
   }
+  async exportAccounts(): Promise<string> {
+    const records = await this.accountVault.listCredentials();
+    return records
+      .map(({ email, password, totpSecret }) => `${email}|${password}|${totpSecret ?? ''}`)
+      .join('\n');
+  }
+  async exportCredentials(): Promise<string> {
+    const records = await this.accountVault.listCredentials();
+    return JSON.stringify(
+      records
+        .filter((record) => record.accessToken)
+        .map(({ accessToken, refreshToken, idToken, email }) => ({
+          accessToken,
+          refreshToken,
+          idToken,
+          email,
+        })),
+      null,
+      2,
+    );
+  }
+
+  async importAccounts(content: string): Promise<{ imported: number }> {
+    if (typeof content !== 'string' || !content.trim()) {
+      throw new BadRequestException('Import file is empty');
+    }
+    const records = content
+      .split(/\r?\n/)
+      .filter((line) => line.trim())
+      .map((line) => {
+        const fields = line.split('|');
+        if (fields.length !== 3) {
+          throw new BadRequestException('Each row must contain email|password|TOTP secret');
+        }
+        const [email, password, totpSecret] = fields;
+        const credentials = { email, password, totpSecret };
+        this.validateAccountCredentials(credentials);
+        return credentials;
+      });
+    for (const record of records) {
+      await this.accountVault.upsert({
+        email: record.email.trim().toLowerCase(),
+        password: record.password,
+        totpSecret: record.totpSecret,
+      });
+    }
+    return { imported: records.length };
+  }
+
 
   async deleteAccount(connectionId: string): Promise<void> {
     if (!connectionId || !(await this.accountVault.delete(connectionId))) {
@@ -138,7 +187,7 @@ export class CodexService implements OnModuleDestroy {
   }
 
 
-  async startBatchFlow(): Promise<CodexBatchResult> {
+  async startBatchFlow(connectionIds?: string[]): Promise<CodexBatchResult> {
     if (this.batchRunning || this.pending.size > 0 || this.status.active) {
       throw new BadRequestException('A Codex login flow is already active');
     }
@@ -161,6 +210,13 @@ export class CodexService implements OnModuleDestroy {
     let records: AccountVaultRecord[];
     try {
       records = await this.accountVault.listCredentials();
+      if (connectionIds) {
+        const selected = new Set(connectionIds);
+        records = records.filter((record) => selected.has(record.connectionId!));
+        if (records.length !== selected.size) {
+          throw new BadRequestException('A selected Codex account was not found');
+        }
+      }
     } catch (error) {
       result.state = 'failed';
       result.completedAt = Date.now();

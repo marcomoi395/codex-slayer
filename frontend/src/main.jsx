@@ -21,9 +21,15 @@ const api = {
       method: 'POST',
       body: JSON.stringify(credentials),
     }),
-  batch: () =>
+  batch: (connectionIds) =>
     api.request('/auth/codex/batch', {
       method: 'POST',
+      body: JSON.stringify({ connectionIds }),
+    }),
+  import: (content) =>
+    api.request('/auth/codex/accounts/import', {
+      method: 'POST',
+      body: JSON.stringify({ content }),
     }),
   delete: (connectionId) =>
     api.request(`/auth/codex/accounts/${encodeURIComponent(connectionId)}`, {
@@ -33,6 +39,7 @@ const api = {
 
 function App() {
   const [accounts, setAccounts] = useState([]);
+  const [selectedAccountIds, setSelectedAccountIds] = useState(null);
   const [status, setStatus] = useState({ active: false, logs: [] });
   const [form, setForm] = useState({ email: '', password: '', totpSecret: '' });
   const [message, setMessage] = useState('');
@@ -42,6 +49,8 @@ function App() {
   const [deleteCandidate, setDeleteCandidate] = useState('');
   const [deleting, setDeleting] = useState(false);
   const [refreshError, setRefreshError] = useState('');
+  const [importing, setImporting] = useState(false);
+
 
   useEffect(() => {
     let mounted = true;
@@ -53,6 +62,9 @@ function App() {
         ]);
         if (mounted) {
           setAccounts(nextAccounts);
+          setSelectedAccountIds((current) =>
+            current ?? (nextAccounts.length ? nextAccounts.map((account) => account.connectionId) : null),
+          );
           setStatus(nextStatus);
           setRefreshError('');
         }
@@ -95,7 +107,7 @@ function App() {
     setMessage('');
     setError('');
     try {
-      await api.batch();
+      await api.batch(selectedAccountIds);
       setMessage('Batch started. Watch the progress panel.');
     } catch (batchError) {
       setError(batchError.message);
@@ -112,6 +124,9 @@ function App() {
       setAccounts((current) =>
         current.filter((account) => account.connectionId !== connectionId),
       );
+      setSelectedAccountIds((current) =>
+        current?.filter((id) => id !== connectionId) ?? null,
+      );
       setDeleteCandidate('');
     } catch (deleteError) {
       setError(deleteError.message);
@@ -119,10 +134,60 @@ function App() {
       setDeleting(false);
     }
   };
+  const importFile = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    setImporting(true);
+    setMessage('');
+    setError('');
+    try {
+      const result = await api.import(await file.text());
+      setMessage(`Imported ${result.imported} account(s). Existing emails were updated.`);
+      setAccounts(await api.accounts());
+    } catch (importError) {
+      setError(importError.message);
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const exportFile = async () => {
+    setError('');
+    try {
+      const response = await fetch('/auth/codex/accounts/export');
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'codex-accounts.txt';
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (exportError) {
+      setError(exportError.message);
+    }
+  };
+
+  const exportCredentials = async () => {
+    setError('');
+    try {
+      const response = await fetch('/auth/codex/accounts/credentials/export');
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'codex-credentials.json';
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (exportError) {
+      setError(exportError.message);
+    }
+  };
+
 
   const batch = status.batch;
   const locked =
-    saving || startingBatch || status.active || Boolean(batch?.active);
+    saving || importing || startingBatch || status.active || Boolean(batch?.active);
   const state = status.state ?? (batch?.active ? 'batch' : 'idle');
 
   return (
@@ -301,10 +366,30 @@ function App() {
             </h2>
           </div>
         </div>
+        <div className="vault-actions">
+          <button className="secondary-button" type="button" onClick={exportFile}>
+            EXPORT PLAIN TEXT
+          </button>
+          <button className="secondary-button" type="button" onClick={exportCredentials}>
+            EXPORT TOKENS JSON
+          </button>
+          <label className="secondary-button file-button">
+            {importing ? 'IMPORTING…' : 'IMPORT FILE'}
+            <input
+              accept=".txt,text/plain"
+              disabled={locked || importing}
+              onChange={importFile}
+              type="file"
+            />
+          </label>
+        </div>
+        <p className="field-hint">
+          Exported files contain plaintext passwords and TOTP secrets. Import updates matching emails.
+        </p>
         <button
           className="primary-button batch-button"
           type="button"
-          disabled={locked || accounts.length === 0}
+          disabled={locked || !selectedAccountIds?.length}
           onClick={startBatch}
         >
           {startingBatch || batch?.active ? 'BATCH RUNNING…' : 'START BATCH'}
@@ -313,6 +398,21 @@ function App() {
           <ul className="account-list">
             {accounts.map((account) => (
               <li key={account.connectionId}>
+                <input
+                  className="account-checkbox"
+                  type="checkbox"
+                  aria-label={`Select ${account.email} for batch`}
+                  checked={selectedAccountIds?.includes(account.connectionId) ?? true}
+                  onChange={(event) =>
+                    setSelectedAccountIds((current) => {
+                      const selected = current ?? accounts.map((item) => item.connectionId);
+                      return event.target.checked
+                        ? [...selected, account.connectionId]
+                        : selected.filter((id) => id !== account.connectionId);
+                    })
+                  }
+                  disabled={locked}
+                />
                 <span className="account-email">
                   {account.email} <small>({account.status})</small>
                 </span>
@@ -359,8 +459,8 @@ function App() {
       </section>
 
       <footer>
-        PIXEL LOGIN SYSTEM <span aria-hidden="true">//</span> SECRETS STAY IN
-        THE VAULT
+        PIXEL LOGIN SYSTEM <span aria-hidden="true">//</span> EXPORTS ARE
+        PLAINTEXT
       </footer>
     </main>
   );

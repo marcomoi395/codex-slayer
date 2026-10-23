@@ -49,6 +49,97 @@ describe('CodexService', () => {
     expect(service.getStatus()).toEqual({ active: false, logs: [] });
   });
 
+  it('imports and exports account credentials as pipe-delimited plain text', async () => {
+    const testService = new CodexService({
+      ...config,
+      databasePath: `/tmp/codex-import-export-${randomUUID()}.sqlite`,
+      encryptionKey: 'test-only-encryption-key',
+    });
+    try {
+      await expect(
+        testService.importAccounts(
+          'Operator@example.com|password|GEZDGNBVGY3TQOJQ\nsecond@example.com|secret|JBSWY3DPEHPK3PXP',
+        ),
+      ).resolves.toEqual({ imported: 2 });
+      await expect(testService.exportAccounts()).resolves.toBe(
+        'operator@example.com|password|GEZDGNBVGY3TQOJQ\nsecond@example.com|secret|JBSWY3DPEHPK3PXP',
+      );
+    } finally {
+      await testService.onModuleDestroy();
+    }
+  });
+
+  it('exports stored OAuth tokens and batches only selected accounts', async () => {
+    const databasePath = `/tmp/codex-selected-export-${randomUUID()}.sqlite`;
+    const vault = new AccountVault(databasePath, 'test-only-encryption-key');
+    const first = await vault.upsert({
+      email: 'first@example.com',
+      password: 'password',
+      accessToken: 'first-access',
+      refreshToken: 'first-refresh',
+      idToken: 'first-id',
+    });
+    await vault.upsert({
+      email: 'second@example.com',
+      password: 'password',
+      accessToken: 'second-access',
+      refreshToken: 'second-refresh',
+      idToken: 'second-id',
+    });
+    const classify = jest.fn().mockResolvedValue('valid');
+    const testService = new CodexService(
+      { ...config, databasePath, encryptionKey: 'test-only-encryption-key' },
+      { classify },
+    );
+    try {
+      await expect(testService.exportCredentials()).resolves.toBe(
+        JSON.stringify([
+          {
+            accessToken: 'first-access',
+            refreshToken: 'first-refresh',
+            idToken: 'first-id',
+            email: 'first@example.com',
+          },
+          {
+            accessToken: 'second-access',
+            refreshToken: 'second-refresh',
+            idToken: 'second-id',
+            email: 'second@example.com',
+          },
+        ], null, 2),
+      );
+      await expect(testService.startBatchFlow([first.connectionId])).resolves.toMatchObject({
+        total: 1,
+        completed: 1,
+        skipped: 1,
+      });
+      expect(classify).toHaveBeenCalledTimes(1);
+      expect(classify).toHaveBeenCalledWith({ accessToken: 'first-access' });
+    } finally {
+      await testService.onModuleDestroy();
+      vault.close();
+    }
+  });
+
+  it('rejects malformed imports before saving any account', async () => {
+    const databasePath = `/tmp/codex-invalid-import-${randomUUID()}.sqlite`;
+    const testService = new CodexService({
+      ...config,
+      databasePath,
+      encryptionKey: 'test-only-encryption-key',
+    });
+    try {
+      await expect(
+        testService.importAccounts(
+          'valid@example.com|password|GEZDGNBVGY3TQOJQ\ninvalid-row',
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      await expect(testService.getAccounts()).resolves.toEqual([]);
+    } finally {
+      await testService.onModuleDestroy();
+    }
+  });
+
   it('completes the credential and callback flow through a fake browser', async () => {
     const databasePath = `/tmp/codex-service-${randomUUID()}.sqlite`;
     const testService = new CodexService({
