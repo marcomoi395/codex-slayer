@@ -68,6 +68,88 @@ describe('AccountVault', () => {
     restarted.close();
   });
 
+  it('saves pending credentials, lists safe status, and reads credentials for a batch', async () => {
+    const vault = new AccountVault(databasePath, 'test-encryption-key');
+    const saved = await vault.upsert({
+      email: ' Pending@Example.com ',
+      password: 'pending-password',
+      totpSecret: 'pending-totp',
+    });
+
+    expect(saved.status).toBe('pending');
+    expect(await vault.list()).toEqual([
+      expect.objectContaining({
+        email: 'pending@example.com',
+        connectionId: saved.connectionId,
+        status: 'pending',
+      }),
+    ]);
+    expect(JSON.stringify(await vault.list())).not.toContain('pending-password');
+    expect(await vault.listCredentials(50)).toEqual([
+      expect.objectContaining({
+        connectionId: saved.connectionId,
+        email: 'pending@example.com',
+        password: 'pending-password',
+        totpSecret: 'pending-totp',
+        accessToken: undefined,
+      }),
+    ]);
+
+    const authenticated = await vault.upsert({
+      email: 'PENDING@example.com',
+      password: 'updated-password',
+      totpSecret: 'updated-totp',
+      accessToken: 'access-token',
+      refreshToken: 'refresh-token',
+    });
+    expect(authenticated).toEqual(
+      expect.objectContaining({
+        connectionId: saved.connectionId,
+        status: 'authenticated',
+      }),
+    );
+    expect(await vault.get(saved.connectionId)).toEqual(
+      expect.objectContaining({
+        email: 'pending@example.com',
+        accessToken: 'access-token',
+        refreshToken: 'refresh-token',
+      }),
+    );
+    vault.close();
+  });
+
+  it('retains access, refresh, and ID tokens during a credential-only upsert', async () => {
+    const vault = new AccountVault(databasePath, 'test-encryption-key');
+    await vault.upsert({
+      email: 'reauth@example.com',
+      password: 'old-password',
+      accessToken: 'old-access-token',
+      refreshToken: 'old-refresh-token',
+      idToken: 'old-id-token',
+      expiresAt: 1234,
+      scope: 'offline_access',
+      tokenType: 'Bearer',
+    });
+
+    await vault.upsert({
+      email: 'reauth@example.com',
+      password: 'new-password',
+    });
+
+    expect(await vault.listCredentials()).toEqual([
+      expect.objectContaining({
+        password: 'new-password',
+        accessToken: 'old-access-token',
+        refreshToken: 'old-refresh-token',
+        idToken: 'old-id-token',
+        expiresAt: 1234,
+        scope: 'offline_access',
+        tokenType: 'Bearer',
+      }),
+    ]);
+    vault.close();
+  });
+
   it('rejects vault access without an encryption key', async () => {
     const vault = new AccountVault(databasePath);
     await expect(vault.list()).rejects.toThrow(

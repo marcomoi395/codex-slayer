@@ -16,10 +16,20 @@ const api = {
   },
   accounts: () => api.request('/auth/codex/accounts'),
   status: () => api.request('/auth/codex/status'),
-  start: (credentials) =>
+  save: (credentials) =>
     api.request('/auth/codex/accounts', {
       method: 'POST',
       body: JSON.stringify(credentials),
+    }),
+  batch: (connectionIds) =>
+    api.request('/auth/codex/batch', {
+      method: 'POST',
+      body: JSON.stringify({ connectionIds }),
+    }),
+  import: (content) =>
+    api.request('/auth/codex/accounts/import', {
+      method: 'POST',
+      body: JSON.stringify({ content }),
     }),
   delete: (connectionId) =>
     api.request(`/auth/codex/accounts/${encodeURIComponent(connectionId)}`, {
@@ -29,14 +39,18 @@ const api = {
 
 function App() {
   const [accounts, setAccounts] = useState([]);
+  const [selectedAccountIds, setSelectedAccountIds] = useState(null);
   const [status, setStatus] = useState({ active: false, logs: [] });
   const [form, setForm] = useState({ email: '', password: '', totpSecret: '' });
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [startingBatch, setStartingBatch] = useState(false);
   const [deleteCandidate, setDeleteCandidate] = useState('');
   const [deleting, setDeleting] = useState(false);
   const [refreshError, setRefreshError] = useState('');
+  const [importing, setImporting] = useState(false);
+
 
   useEffect(() => {
     let mounted = true;
@@ -48,6 +62,9 @@ function App() {
         ]);
         if (mounted) {
           setAccounts(nextAccounts);
+          setSelectedAccountIds((current) =>
+            current ?? (nextAccounts.length ? nextAccounts.map((account) => account.connectionId) : null),
+          );
           setStatus(nextStatus);
           setRefreshError('');
         }
@@ -66,20 +83,36 @@ function App() {
     };
   }, []);
 
-  const start = async (event) => {
+  const save = async (event) => {
     event.preventDefault();
-    setBusy(true);
+    setSaving(true);
     setMessage('');
     setError('');
     const credentials = form;
-    setForm({ email: credentials.email, password: '', totpSecret: '' });
     try {
-      await api.start(credentials);
-      setMessage('Login started. Watch the status panel.');
-    } catch (startError) {
-      setError(startError.message);
+      await api.save(credentials);
+      setForm({ email: credentials.email, password: '', totpSecret: '' });
+      setMessage('Account saved. Add another account or start the batch.');
+      const nextAccounts = await api.accounts();
+      setAccounts(nextAccounts);
+    } catch (saveError) {
+      setError(saveError.message);
     } finally {
-      setBusy(false);
+      setSaving(false);
+    }
+  };
+
+  const startBatch = async () => {
+    setStartingBatch(true);
+    setMessage('');
+    setError('');
+    try {
+      await api.batch(selectedAccountIds);
+      setMessage('Batch started. Watch the progress panel.');
+    } catch (batchError) {
+      setError(batchError.message);
+    } finally {
+      setStartingBatch(false);
     }
   };
 
@@ -91,6 +124,9 @@ function App() {
       setAccounts((current) =>
         current.filter((account) => account.connectionId !== connectionId),
       );
+      setSelectedAccountIds((current) =>
+        current?.filter((id) => id !== connectionId) ?? null,
+      );
       setDeleteCandidate('');
     } catch (deleteError) {
       setError(deleteError.message);
@@ -98,9 +134,61 @@ function App() {
       setDeleting(false);
     }
   };
+  const importFile = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    setImporting(true);
+    setMessage('');
+    setError('');
+    try {
+      const result = await api.import(await file.text());
+      setMessage(`Imported ${result.imported} account(s). Existing emails were updated.`);
+      setAccounts(await api.accounts());
+    } catch (importError) {
+      setError(importError.message);
+    } finally {
+      setImporting(false);
+    }
+  };
 
-  const locked = busy || status.active;
-  const state = status.state ?? 'idle';
+  const exportFile = async () => {
+    setError('');
+    try {
+      const response = await fetch('/auth/codex/accounts/export');
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'codex-accounts.txt';
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (exportError) {
+      setError(exportError.message);
+    }
+  };
+
+  const exportCredentials = async () => {
+    setError('');
+    try {
+      const response = await fetch('/auth/codex/accounts/credentials/export');
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'codex-credentials.json';
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (exportError) {
+      setError(exportError.message);
+    }
+  };
+
+
+  const batch = status.batch;
+  const locked =
+    saving || importing || startingBatch || status.active || Boolean(batch?.active);
+  const state = status.state ?? (batch?.active ? 'batch' : 'idle');
 
   return (
     <main className="page-shell">
@@ -112,7 +200,7 @@ function App() {
         <div>
           <p className="eyebrow">CODEX AUTH TERMINAL // 8-BIT MODE</p>
           <h1>Codex Login</h1>
-          <p className="subtitle">One account. One secure sign-in flow.</p>
+          <p className="subtitle">Save accounts, then run one sequential batch.</p>
         </div>
       </header>
 
@@ -123,11 +211,11 @@ function App() {
               01
             </span>
             <div>
-              <p className="eyebrow">AUTHENTICATE</p>
+              <p className="eyebrow">SAVE ACCOUNT</p>
               <h2 id="login-heading">Account credentials</h2>
             </div>
           </div>
-          <form onSubmit={start}>
+          <form onSubmit={save}>
             <label htmlFor="email">Email address</label>
             <input
               autoComplete="username"
@@ -166,11 +254,10 @@ function App() {
               }
             />
             <p className="field-hint">
-              Base32 secret. The six-digit code is generated only during
-              sign-in.
+              Base32 secret. Saved encrypted; used only during batch sign-in.
             </p>
             <button className="primary-button" type="submit" disabled={locked}>
-              {locked ? 'LOGIN RUNNING…' : 'START CODEX LOGIN'}
+              {saving ? 'SAVING…' : 'SAVE ACCOUNT'}
             </button>
           </form>
           {message && (
@@ -212,6 +299,38 @@ function App() {
               STEP // {status.step.replaceAll('_', ' ')}
             </p>
           )}
+          {batch && (
+            <>
+              {batch.currentEmail && (
+                <p className="state-email">Current: {batch.currentEmail}</p>
+              )}
+              <p className="quiet">
+                Run {batch.runId} · {batch.state} · started{' '}
+                {new Date(batch.startedAt).toLocaleString()}
+                {batch.completedAt && ` · completed ${new Date(batch.completedAt).toLocaleString()}`}
+              </p>
+              <dl className="batch-counts" aria-label="Batch progress">
+                <div><dt>PROCESSED</dt><dd>{batch.completed}</dd></div>
+                <div><dt>SELECTED</dt><dd>{batch.total}</dd></div>
+                <div><dt>SUCCESS</dt><dd>{batch.authenticated}</dd></div>
+                <div><dt>SKIPPED</dt><dd>{batch.skipped}</dd></div>
+                <div><dt>UNKNOWN</dt><dd>{batch.indeterminate}</dd></div>
+                <div><dt>FAILED</dt><dd>{batch.failed}</dd></div>
+              </dl>
+              {!batch.active && batch.accounts.length > 0 && (
+                <ul className="batch-report">
+                  {batch.accounts.map((account) => (
+                    <li key={`${account.email}-${account.outcome}`}>
+                      <span>{account.email}</span>
+                      <strong>{account.outcome}</strong>
+                      {account.reason && <small>{account.reason}</small>}
+                      <small>Completed {new Date(account.completedAt).toLocaleString()}</small>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </>
+          )}
           {status.logs?.length > 0 ? (
             <ol className="log-list">
               {status.logs.map((log) => (
@@ -247,11 +366,56 @@ function App() {
             </h2>
           </div>
         </div>
+        <div className="vault-actions">
+          <button className="secondary-button" type="button" onClick={exportFile}>
+            EXPORT PLAIN TEXT
+          </button>
+          <button className="secondary-button" type="button" onClick={exportCredentials}>
+            EXPORT TOKENS JSON
+          </button>
+          <label className="secondary-button file-button">
+            {importing ? 'IMPORTING…' : 'IMPORT FILE'}
+            <input
+              accept=".txt,text/plain"
+              disabled={locked || importing}
+              onChange={importFile}
+              type="file"
+            />
+          </label>
+        </div>
+        <p className="field-hint">
+          Exported files contain plaintext passwords and TOTP secrets. Import updates matching emails.
+        </p>
+        <button
+          className="primary-button batch-button"
+          type="button"
+          disabled={locked || !selectedAccountIds?.length}
+          onClick={startBatch}
+        >
+          {startingBatch || batch?.active ? 'BATCH RUNNING…' : 'START BATCH'}
+        </button>
         {accounts.length ? (
           <ul className="account-list">
             {accounts.map((account) => (
               <li key={account.connectionId}>
-                <span className="account-email">{account.email}</span>
+                <input
+                  className="account-checkbox"
+                  type="checkbox"
+                  aria-label={`Select ${account.email} for batch`}
+                  checked={selectedAccountIds?.includes(account.connectionId) ?? true}
+                  onChange={(event) =>
+                    setSelectedAccountIds((current) => {
+                      const selected = current ?? accounts.map((item) => item.connectionId);
+                      return event.target.checked
+                        ? [...selected, account.connectionId]
+                        : selected.filter((id) => id !== account.connectionId);
+                    })
+                  }
+                  disabled={locked}
+                />
+                <span className="account-email">
+                  {account.email} <small>({account.status})</small>
+                </span>
                 {deleteCandidate === account.connectionId ? (
                   <div
                     className="delete-confirm"
@@ -295,8 +459,8 @@ function App() {
       </section>
 
       <footer>
-        PIXEL LOGIN SYSTEM <span aria-hidden="true">//</span> SECRETS STAY IN
-        THE VAULT
+        PIXEL LOGIN SYSTEM <span aria-hidden="true">//</span> EXPORTS ARE
+        PLAINTEXT
       </footer>
     </main>
   );

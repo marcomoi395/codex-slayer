@@ -3,6 +3,7 @@ import {
   Inject,
   Injectable,
   OnModuleDestroy,
+  Optional,
   ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -11,13 +12,17 @@ import { authenticator } from 'otplib';
 import { createServer, type Server } from 'node:http';
 import type { Browser, Locator, Page } from 'playwright-core';
 
-import { AccountVault } from './account-vault';
-import { CODEX_CONFIG } from './codex.constants';
+import { AccountVault, type AccountVaultRecord } from './account-vault';
+import { CODEX_BROWSER_LAUNCHER, CODEX_CONFIG } from './codex.constants';
 import type { CodexConfig } from './codex.config';
+import { CodexQuotaClient, type CodexQuotaClassification } from './codex-quota';
 import type {
   CodexAccountRequest,
   CodexAccountSummary,
   CodexAuthorization,
+  CodexBatchAccountResult,
+  CodexBatchResult,
+  CodexBatchStatus,
   CodexCallbackResponse,
   CodexConnection,
   CodexStatus,
@@ -31,6 +36,12 @@ interface PendingAuthorization extends CodexAuthorization {
   password?: string;
   totpSecret?: string;
 }
+
+interface CallbackWaiter {
+  resolve: (response: CodexCallbackResponse) => void;
+  reject: (error: unknown) => void;
+}
+type BrowserLauncher = () => Promise<Browser>;
 
 type BrowserRoute =
   | 'email'
@@ -46,15 +57,30 @@ type BrowserRoute =
 const MANUAL_STEP_MESSAGE =
   'Codex requires a manual security step (CAPTCHA or email/phone verification). Complete it manually, then retry.';
 
+const BATCH_CALLBACK_TIMEOUT_MS = 60_000;
+
 @Injectable()
 export class CodexService implements OnModuleDestroy {
   private readonly pending = new Map<string, PendingAuthorization>();
+  private readonly callbackWaiters = new Map<string, CallbackWaiter>();
   private readonly accountVault: AccountVault;
   private status: CodexStatus = { active: false, logs: [] };
   private browser?: Browser;
   private callbackServer?: Server;
+  private batchRunning = false;
+  private batchStatus?: CodexBatchStatus;
+  private readonly browserLauncher: BrowserLauncher;
 
-  constructor(@Inject(CODEX_CONFIG) private readonly config: CodexConfig) {
+  constructor(
+    @Inject(CODEX_CONFIG) private readonly config: CodexConfig,
+    @Inject(CodexQuotaClient)
+    private readonly quotaClient: Pick<CodexQuotaClient, 'classify'> =
+      new CodexQuotaClient({ url: config.quotaUrl }),
+    @Optional()
+    @Inject(CODEX_BROWSER_LAUNCHER)
+    browserLauncher?: BrowserLauncher,
+  ) {
+    this.browserLauncher = browserLauncher ?? (() => this.launchBrowser());
     this.accountVault = new AccountVault(
       config.databasePath ?? 'codex-accounts.sqlite',
       config.encryptionKey,
@@ -64,6 +90,16 @@ export class CodexService implements OnModuleDestroy {
   getStatus(): CodexStatus {
     return {
       ...this.status,
+      ...(this.batchStatus
+        ? {
+            batch: {
+              ...this.batchStatus,
+              accounts: this.batchStatus.accounts.map((account) => ({
+                ...account,
+              })),
+            },
+          }
+        : {}),
       logs: this.status.logs.map((log) => ({ ...log })),
     };
   }
@@ -71,6 +107,55 @@ export class CodexService implements OnModuleDestroy {
   getAccounts(): Promise<CodexAccountSummary[]> {
     return this.accountVault.list();
   }
+  async exportAccounts(): Promise<string> {
+    const records = await this.accountVault.listCredentials();
+    return records
+      .map(({ email, password, totpSecret }) => `${email}|${password}|${totpSecret ?? ''}`)
+      .join('\n');
+  }
+  async exportCredentials(): Promise<string> {
+    const records = await this.accountVault.listCredentials();
+    return JSON.stringify(
+      records
+        .filter((record) => record.accessToken)
+        .map(({ accessToken, refreshToken, idToken, email }) => ({
+          accessToken,
+          refreshToken,
+          idToken,
+          email,
+        })),
+      null,
+      2,
+    );
+  }
+
+  async importAccounts(content: string): Promise<{ imported: number }> {
+    if (typeof content !== 'string' || !content.trim()) {
+      throw new BadRequestException('Import file is empty');
+    }
+    const records = content
+      .split(/\r?\n/)
+      .filter((line) => line.trim())
+      .map((line) => {
+        const fields = line.split('|');
+        if (fields.length !== 3) {
+          throw new BadRequestException('Each row must contain email|password|TOTP secret');
+        }
+        const [email, password, totpSecret] = fields;
+        const credentials = { email, password, totpSecret };
+        this.validateAccountCredentials(credentials);
+        return credentials;
+      });
+    for (const record of records) {
+      await this.accountVault.upsert({
+        email: record.email.trim().toLowerCase(),
+        password: record.password,
+        totpSecret: record.totpSecret,
+      });
+    }
+    return { imported: records.length };
+  }
+
 
   async deleteAccount(connectionId: string): Promise<void> {
     if (!connectionId || !(await this.accountVault.delete(connectionId))) {
@@ -78,37 +163,267 @@ export class CodexService implements OnModuleDestroy {
     }
   }
 
+  async saveAccount(
+    credentials: CodexAccountRequest,
+  ): Promise<{ saved: true }> {
+    this.validateAccountCredentials(credentials);
+    await this.accountVault.upsert({
+      email: credentials.email.trim().toLowerCase(),
+      password: credentials.password,
+      totpSecret: credentials.totpSecret,
+    });
+    return { saved: true };
+  }
+
   async startAccountFlow(
     credentials: CodexAccountRequest,
   ): Promise<{ started: true }> {
     this.validateAccountCredentials(credentials);
-    if (this.pending.size > 0 || this.status.active) {
+    if (this.pending.size > 0 || this.status.active || this.batchRunning) {
       throw new BadRequestException('A Codex login flow is already active');
     }
+    await this.beginAccountFlow(credentials);
+    return { started: true };
+  }
 
+
+  async startBatchFlow(connectionIds?: string[]): Promise<CodexBatchResult> {
+    if (this.batchRunning || this.pending.size > 0 || this.status.active) {
+      throw new BadRequestException('A Codex login flow is already active');
+    }
+    this.batchRunning = true;
+    const runId = randomUUID();
+    const startedAt = Date.now();
+    const result: CodexBatchResult = {
+      runId,
+      startedAt,
+      state: 'running',
+      total: 0,
+      completed: 0,
+      authenticated: 0,
+      skipped: 0,
+      indeterminate: 0,
+      failed: 0,
+      accounts: [],
+    };
+    this.batchStatus = { ...result, active: true };
+    let records: AccountVaultRecord[];
+    try {
+      records = await this.accountVault.listCredentials();
+      if (connectionIds) {
+        const selected = new Set(connectionIds);
+        records = records.filter((record) => selected.has(record.connectionId!));
+        if (records.length !== selected.size) {
+          throw new BadRequestException('A selected Codex account was not found');
+        }
+      }
+    } catch (error) {
+      result.state = 'failed';
+      result.completedAt = Date.now();
+      this.batchRunning = false;
+      this.batchStatus = { ...result, active: false };
+      this.updateStatus('batch_failed', {
+        active: false,
+        step: 'batch',
+        level: 'error',
+        message: `Codex account batch could not start: ${this.safeFailureMessage(error)}`,
+      });
+      throw error;
+    }
+    result.total = records.length;
+    this.batchStatus = { ...result, active: true, accounts: [] };
+    this.updateStatus('batch_started', {
+      active: true,
+      step: 'batch',
+      message: `Starting Codex account batch (${records.length} accounts)`,
+    });
+
+    try {
+      for (const record of records) {
+        this.updateBatchStatus({ currentEmail: record.email });
+        this.updateStatus('batch_progress', {
+          active: true,
+          email: record.email,
+          step: 'batch',
+          message: 'Processing Codex account batch item',
+        });
+        let accountResult: Omit<CodexBatchAccountResult, 'completedAt'>;
+        if (record.accessToken) {
+          let classification: CodexQuotaClassification = 'indeterminate';
+          try {
+            classification = await this.quotaClient.classify({
+              accessToken: record.accessToken,
+            });
+          } catch {
+            classification = 'indeterminate';
+          }
+          if (classification === 'valid') {
+            accountResult = { email: record.email, outcome: 'skipped' };
+          } else if (classification === 'indeterminate') {
+            accountResult = {
+              email: record.email,
+              outcome: 'indeterminate',
+              reason: 'Quota status could not be determined',
+            };
+          } else {
+            accountResult = await this.runBatchAccount(record);
+          }
+        } else {
+          accountResult = await this.runBatchAccount(record);
+        }
+        result.accounts.push({ ...accountResult, completedAt: Date.now() });
+        result.completed += 1;
+        result[accountResult.outcome] += 1;
+        this.batchStatus = {
+          ...result,
+          active: true,
+          ...(this.batchStatus?.currentEmail
+            ? { currentEmail: this.batchStatus.currentEmail }
+            : {}),
+        };
+      }
+      result.state = 'completed';
+      result.completedAt = Date.now();
+      return { ...result, accounts: result.accounts.map((account) => ({ ...account })) };
+    } catch (error) {
+      result.state = 'failed';
+      result.completedAt = Date.now();
+      throw error;
+    } finally {
+      this.batchRunning = false;
+      this.batchStatus = { ...result, active: false };
+      this.updateStatus(result.state === 'completed' ? 'batch_completed' : 'batch_failed', {
+        active: false,
+        step: 'batch',
+        ...(result.state === 'failed' ? { level: 'error' } : {}),
+        message: `Codex account batch ${result.state} (${result.completed}/${result.total})`,
+      });
+    }
+  }
+
+  private async runBatchAccount(
+    record: AccountVaultRecord,
+  ): Promise<Omit<CodexBatchAccountResult, 'completedAt'>> {
+    this.updateStatus('batch_account', {
+      active: true,
+      email: record.email,
+      step: 'batch',
+      message: 'Running Codex account authorization',
+    });
+    try {
+      await this.runSavedAccountFlow(record);
+      return { email: record.email, outcome: 'authenticated' };
+    } catch (error) {
+      return {
+        email: record.email,
+        outcome: 'failed',
+        reason: this.safeFailureMessage(error),
+      };
+    }
+  }
+
+  private async runSavedAccountFlow(record: AccountVaultRecord): Promise<void> {
+    this.validateAccountCredentials({
+      email: record.email,
+      password: record.password,
+      totpSecret: record.totpSecret,
+    });
+    let waiter!: CallbackWaiter;
+    const completion = new Promise<CodexCallbackResponse>((resolve, reject) => {
+      waiter = { resolve, reject };
+    });
+    let state: string | undefined;
+    try {
+      const authorization = await this.beginAccountFlow(
+        {
+          email: record.email,
+          password: record.password,
+          totpSecret: record.totpSecret,
+        },
+        waiter,
+      );
+      state = authorization.state;
+      await this.waitForBatchCallback(completion);
+    } finally {
+      if (state) {
+        this.pending.delete(state);
+        this.callbackWaiters.delete(state);
+      }
+      await this.closeBrowser();
+      this.closeCallbackServer();
+    }
+  }
+
+  private async waitForBatchCallback(
+    completion: Promise<CodexCallbackResponse>,
+  ): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        completion,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () =>
+              reject(
+                new ServiceUnavailableException(
+                  'Codex authorization callback timed out',
+                ),
+              ),
+            BATCH_CALLBACK_TIMEOUT_MS,
+          );
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  private updateBatchStatus(options: { currentEmail?: string }): void {
+    if (!this.batchStatus) return;
+    this.batchStatus = {
+      ...this.batchStatus,
+      ...options,
+      accounts: this.batchStatus.accounts.map((account) => ({ ...account })),
+    };
+  }
+
+  private async beginAccountFlow(
+    credentials: CodexAccountRequest,
+    waiter?: CallbackWaiter,
+  ): Promise<CodexAuthorization> {
     let authorization: CodexAuthorization | undefined;
     try {
+      const email = credentials.email.trim().toLowerCase();
+      await this.accountVault.upsert({
+        email,
+        password: credentials.password,
+        totpSecret: credentials.totpSecret,
+      });
       this.updateStatus('validating', {
         active: true,
-        email: credentials.email.trim().toLowerCase(),
+        email,
         step: 'credentials',
         message: 'Validating Codex account credentials',
       });
-      authorization = await this.createAuthorizationLink(credentials.email);
+      authorization = await this.createAuthorizationLink(email);
 
       const pending = this.pending.get(authorization.state);
       if (!pending) throw new Error('Authorization state was not created');
       pending.password = credentials.password;
       pending.totpSecret = credentials.totpSecret;
+      if (waiter) this.callbackWaiters.set(authorization.state, waiter);
 
       await this.openBrowser(authorization.authorizationUrl, credentials);
       this.updateStatus('awaiting_callback', {
         step: 'callback',
         message: 'Waiting for Codex authorization callback',
       });
-      return { started: true };
+      return authorization;
     } catch (error) {
-      if (authorization) this.pending.delete(authorization.state);
+      if (authorization) {
+        this.pending.delete(authorization.state);
+        this.callbackWaiters.delete(authorization.state);
+      }
       await this.closeBrowser();
       this.closeCallbackServer();
       this.updateStatus('failed', {
@@ -180,12 +495,12 @@ export class CodexService implements OnModuleDestroy {
   ): Promise<CodexCallbackResponse> {
     if (error) {
       if (state) this.pending.delete(state);
-      await this.failCallback('Codex authorization was denied');
+      await this.failCallback('Codex authorization was denied', state);
       throw new UnauthorizedException('Codex authorization failed');
     }
     if (!code || !state) {
       if (state) this.pending.delete(state);
-      await this.failCallback('Codex authorization callback was incomplete');
+      await this.failCallback('Codex authorization callback was incomplete', state);
       throw new BadRequestException('Codex callback requires code and state');
     }
 
@@ -194,6 +509,7 @@ export class CodexService implements OnModuleDestroy {
       if (session) this.pending.delete(state);
       await this.failCallback(
         'Codex authorization state was invalid or expired',
+        state,
       );
       throw new UnauthorizedException(
         'Codex OAuth state is invalid or expired',
@@ -245,19 +561,26 @@ export class CodexService implements OnModuleDestroy {
           )
         : undefined;
       this.pending.delete(state);
+      const callbackResponse: CodexCallbackResponse = {
+        ok: true,
+        email: session.email,
+        connectionId: account?.connectionId,
+      };
+      const waiter = this.callbackWaiters.get(state);
+      this.callbackWaiters.delete(state);
+      waiter?.resolve(callbackResponse);
       this.updateStatus('completed', {
         active: false,
         email: session.email,
         step: 'callback',
         message: 'Codex account authorization completed',
       });
-      return {
-        ok: true,
-        email: session.email,
-        connectionId: account?.connectionId,
-      };
+      return callbackResponse;
     } catch (callbackError) {
       this.pending.delete(state);
+      const waiter = this.callbackWaiters.get(state);
+      this.callbackWaiters.delete(state);
+      waiter?.reject(callbackError);
       this.updateStatus('failed', {
         active: false,
         email: session.email,
@@ -275,6 +598,8 @@ export class CodexService implements OnModuleDestroy {
     await this.closeBrowser();
     this.closeCallbackServer();
     this.pending.clear();
+    this.callbackWaiters.clear();
+    this.batchRunning = false;
     this.accountVault.close();
   }
 
@@ -397,7 +722,7 @@ export class CodexService implements OnModuleDestroy {
   ): Promise<void> {
     let page: Page;
     try {
-      this.browser = await this.launchBrowser();
+      this.browser = await this.browserLauncher();
       const context = await this.browser.newContext();
       page = await context.newPage();
     } catch {
@@ -623,8 +948,16 @@ export class CodexService implements OnModuleDestroy {
     };
   }
 
-  private async failCallback(message: string): Promise<void> {
-    this.pending.clear();
+  private async failCallback(message: string, state?: string): Promise<void> {
+    if (state) {
+      this.pending.delete(state);
+      const waiter = this.callbackWaiters.get(state);
+      this.callbackWaiters.delete(state);
+      waiter?.reject(new UnauthorizedException('Codex authorization failed'));
+    } else {
+      this.pending.clear();
+      this.callbackWaiters.clear();
+    }
     this.updateStatus('failed', {
       active: false,
       step: 'callback',
@@ -650,13 +983,21 @@ export class CodexService implements OnModuleDestroy {
   private async closeBrowser(): Promise<void> {
     const browser = this.browser;
     this.browser = undefined;
-    await browser?.close();
+    try {
+      await browser?.close();
+    } catch {
+      // Cleanup must not stop the next saved-account attempt.
+    }
   }
 
   private closeCallbackServer(): void {
     const server = this.callbackServer;
     this.callbackServer = undefined;
-    if (server?.listening) server.close();
+    try {
+      if (server?.listening) server.close();
+    } catch {
+      // Cleanup must not stop the next saved-account attempt.
+    }
   }
 
   private async parseTokenResponse(

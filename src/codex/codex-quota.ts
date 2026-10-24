@@ -1,0 +1,90 @@
+import { CODEX_QUOTA_DEFAULT_URL } from './codex.constants';
+
+export { CODEX_QUOTA_DEFAULT_URL } from './codex.constants';
+
+
+export const CODEX_QUOTA_DEFAULT_TIMEOUT_MS = 10_000;
+
+export type CodexQuotaClassification =
+  | 'valid'
+  | 'reauth-required'
+  | 'indeterminate';
+
+export interface CodexQuotaCredentials {
+  accessToken: string;
+  accountId?: string;
+}
+
+export interface CodexQuotaHttpClient {
+  (url: string, init?: RequestInit): Promise<Response>;
+}
+
+export interface CodexQuotaClientOptions {
+  url?: string;
+  httpClient?: CodexQuotaHttpClient;
+  timeoutMs?: number;
+}
+
+function isQuotaJson(value: unknown): value is Record<string, unknown> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value) &&
+    'plan_type' in value &&
+    typeof value.plan_type === 'string' &&
+    value.plan_type.trim().length > 0
+  );
+}
+
+export class CodexQuotaClient {
+  private readonly url: string;
+  private readonly httpClient: CodexQuotaHttpClient;
+  private readonly timeoutMs: number;
+
+  constructor(options: CodexQuotaClientOptions = {}) {
+    this.url = options.url ?? CODEX_QUOTA_DEFAULT_URL;
+    this.httpClient =
+      options.httpClient ?? globalThis.fetch.bind(globalThis);
+    this.timeoutMs = options.timeoutMs ?? CODEX_QUOTA_DEFAULT_TIMEOUT_MS;
+  }
+
+  async classify(
+    credentials: CodexQuotaCredentials,
+  ): Promise<CodexQuotaClassification> {
+    if (
+      !credentials ||
+      typeof credentials.accessToken !== 'string' ||
+      !credentials.accessToken.trim()
+    ) {
+      return 'indeterminate';
+    }
+
+    const headers: Record<string, string> = {
+      Accept: 'application/json',
+      Authorization: `Bearer ${credentials.accessToken}`,
+    };
+    if (
+      typeof credentials.accountId === 'string' &&
+      credentials.accountId.trim()
+    ) {
+      headers['ChatGPT-Account-ID'] = credentials.accountId;
+    }
+
+    try {
+      const response = await this.httpClient(this.url, {
+        method: 'GET',
+        headers,
+        signal: AbortSignal.timeout(this.timeoutMs),
+      });
+      if (response.status === 401) return 'reauth-required';
+      if (response.status < 200 || response.status >= 300) {
+        return 'indeterminate';
+      }
+
+      const body: unknown = await response.json();
+      return isQuotaJson(body) ? 'valid' : 'indeterminate';
+    } catch {
+      return 'indeterminate';
+    }
+  }
+}

@@ -1,8 +1,14 @@
 import { BadRequestException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import type { Browser } from 'playwright-core';
+import { AccountVault } from './account-vault';
 import { CodexService } from './codex.service';
 import type { CodexConfig } from './codex.config';
+import type { Browser } from 'playwright-core';
+
+const mockCamoufox = jest.fn();
+
+jest.mock('camoufox-js', () => ({ Camoufox: (...args: unknown[]) => mockCamoufox(...args) }));
+
 
 const config: CodexConfig = {
   clientId: 'codex-client-id',
@@ -41,6 +47,97 @@ describe('CodexService', () => {
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(service.getStatus()).toEqual({ active: false, logs: [] });
+  });
+
+  it('imports and exports account credentials as pipe-delimited plain text', async () => {
+    const testService = new CodexService({
+      ...config,
+      databasePath: `/tmp/codex-import-export-${randomUUID()}.sqlite`,
+      encryptionKey: 'test-only-encryption-key',
+    });
+    try {
+      await expect(
+        testService.importAccounts(
+          'Operator@example.com|password|GEZDGNBVGY3TQOJQ\nsecond@example.com|secret|JBSWY3DPEHPK3PXP',
+        ),
+      ).resolves.toEqual({ imported: 2 });
+      await expect(testService.exportAccounts()).resolves.toBe(
+        'operator@example.com|password|GEZDGNBVGY3TQOJQ\nsecond@example.com|secret|JBSWY3DPEHPK3PXP',
+      );
+    } finally {
+      await testService.onModuleDestroy();
+    }
+  });
+
+  it('exports stored OAuth tokens and batches only selected accounts', async () => {
+    const databasePath = `/tmp/codex-selected-export-${randomUUID()}.sqlite`;
+    const vault = new AccountVault(databasePath, 'test-only-encryption-key');
+    const first = await vault.upsert({
+      email: 'first@example.com',
+      password: 'password',
+      accessToken: 'first-access',
+      refreshToken: 'first-refresh',
+      idToken: 'first-id',
+    });
+    await vault.upsert({
+      email: 'second@example.com',
+      password: 'password',
+      accessToken: 'second-access',
+      refreshToken: 'second-refresh',
+      idToken: 'second-id',
+    });
+    const classify = jest.fn().mockResolvedValue('valid');
+    const testService = new CodexService(
+      { ...config, databasePath, encryptionKey: 'test-only-encryption-key' },
+      { classify },
+    );
+    try {
+      await expect(testService.exportCredentials()).resolves.toBe(
+        JSON.stringify([
+          {
+            accessToken: 'first-access',
+            refreshToken: 'first-refresh',
+            idToken: 'first-id',
+            email: 'first@example.com',
+          },
+          {
+            accessToken: 'second-access',
+            refreshToken: 'second-refresh',
+            idToken: 'second-id',
+            email: 'second@example.com',
+          },
+        ], null, 2),
+      );
+      await expect(testService.startBatchFlow([first.connectionId])).resolves.toMatchObject({
+        total: 1,
+        completed: 1,
+        skipped: 1,
+      });
+      expect(classify).toHaveBeenCalledTimes(1);
+      expect(classify).toHaveBeenCalledWith({ accessToken: 'first-access' });
+    } finally {
+      await testService.onModuleDestroy();
+      vault.close();
+    }
+  });
+
+  it('rejects malformed imports before saving any account', async () => {
+    const databasePath = `/tmp/codex-invalid-import-${randomUUID()}.sqlite`;
+    const testService = new CodexService({
+      ...config,
+      databasePath,
+      encryptionKey: 'test-only-encryption-key',
+    });
+    try {
+      await expect(
+        testService.importAccounts(
+          'valid@example.com|password|GEZDGNBVGY3TQOJQ\ninvalid-row',
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      await expect(testService.getAccounts()).resolves.toEqual([]);
+    } finally {
+      await testService.onModuleDestroy();
+    }
   });
 
   it('completes the credential and callback flow through a fake browser', async () => {
@@ -142,10 +239,19 @@ describe('CodexService', () => {
         password: 'password-value',
         totpSecret: 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ',
       });
+      expect(await testService.getAccounts()).toEqual([
+        expect.objectContaining({
+          email: 'operator@example.com',
+          status: 'pending',
+        }),
+      ]);
       await callbackCompletion;
       expect(testService.getStatus().state).toBe('completed');
       expect(await testService.getAccounts()).toEqual([
-        expect.objectContaining({ email: 'operator@example.com' }),
+        expect.objectContaining({
+          email: 'operator@example.com',
+          status: 'authenticated',
+        }),
       ]);
       expect(filledValues).toEqual(
         expect.arrayContaining([
@@ -166,5 +272,240 @@ describe('CodexService', () => {
       await testService.onModuleDestroy();
     }
     expect(closed).toBe(true);
+  });
+
+  it('reports safe account reasons and releases the flow for a later run', async () => {
+    const databasePath = `/tmp/codex-batch-${randomUUID()}.sqlite`;
+    const vault = new AccountVault(databasePath, 'test-only-encryption-key');
+    await vault.upsert({
+      email: 'safe@example.com',
+      password: 'secret-password',
+      accessToken: 'safe-access-token',
+    });
+    const batchService = new CodexService(
+      { ...config, databasePath, encryptionKey: 'test-only-encryption-key' },
+      { classify: async () => 'indeterminate' },
+    );
+    try {
+      const result = await batchService.startBatchFlow();
+      expect(result.accounts).toEqual([
+        expect.objectContaining({
+          email: 'safe@example.com',
+          outcome: 'indeterminate',
+          reason: 'Quota status could not be determined',
+        }),
+      ]);
+      expect(JSON.stringify(batchService.getStatus())).not.toContain(
+        'secret-password',
+      );
+      await expect(batchService.startBatchFlow()).resolves.toMatchObject({
+        total: 1,
+        completed: 1,
+      });
+    } finally {
+      await batchService.onModuleDestroy();
+      vault.close();
+    }
+  });
+
+  it('keeps one run identity from live progress through its final result', async () => {
+    const databasePath = `/tmp/codex-batch-metadata-${randomUUID()}.sqlite`;
+    const vault = new AccountVault(databasePath, 'test-only-encryption-key');
+    await vault.upsert({
+      email: 'run@example.com',
+      password: 'password',
+      accessToken: 'run-token',
+    });
+    let finishClassification!: (result: 'valid') => void;
+    let markClassificationStarted!: () => void;
+    const classificationStarted = new Promise<void>((resolve) => {
+      markClassificationStarted = resolve;
+    });
+    const batchService = new CodexService(
+      { ...config, databasePath, encryptionKey: 'test-only-encryption-key' },
+      {
+        classify: () => {
+          markClassificationStarted();
+          return new Promise<'valid'>((resolve) => {
+            finishClassification = resolve;
+          });
+        },
+      },
+    );
+    try {
+      const completion = batchService.startBatchFlow();
+      await classificationStarted;
+      const progress = batchService.getStatus().batch!;
+      expect(progress.active).toBe(true);
+      expect(progress.currentEmail).toBe('run@example.com');
+      expect(progress.runId).toEqual(expect.any(String));
+      expect(progress.startedAt).toEqual(expect.any(Number));
+      expect(progress.state).toBe('running');
+      finishClassification('valid');
+
+      const result = await completion;
+      expect(result).toMatchObject({
+        runId: progress.runId,
+        startedAt: progress.startedAt,
+        state: 'completed',
+        total: 1,
+        completed: 1,
+      });
+      expect(result.completedAt).toEqual(expect.any(Number));
+      expect(result.completedAt).toBeGreaterThanOrEqual(result.startedAt);
+      expect(result.accounts[0]).toMatchObject({
+        email: 'run@example.com',
+        outcome: 'skipped',
+      });
+      expect(result.accounts[0].completedAt).toEqual(expect.any(Number));
+      expect(batchService.getStatus().batch).toMatchObject({
+        runId: result.runId,
+        startedAt: result.startedAt,
+        completedAt: result.completedAt,
+        state: 'completed',
+        active: false,
+      });
+    } finally {
+      await batchService.onModuleDestroy();
+      vault.close();
+    }
+  });
+
+  it('keeps prior tokens when saving credentials for a reauthentication', async () => {
+    const databasePath = `/tmp/codex-retained-token-${randomUUID()}.sqlite`;
+    const vault = new AccountVault(databasePath, 'test-only-encryption-key');
+    await vault.upsert({
+      email: 'reauth@example.com',
+      password: 'old-password',
+      accessToken: 'old-access-token',
+      refreshToken: 'old-refresh-token',
+      idToken: 'old-id-token',
+    });
+    const classify = jest.fn(async () => 'valid' as const);
+    const batchService = new CodexService(
+      { ...config, databasePath, encryptionKey: 'test-only-encryption-key' },
+      { classify },
+    );
+    try {
+      await batchService.saveAccount({
+        email: 'reauth@example.com',
+        password: 'new-password',
+        totpSecret: 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ',
+      });
+      await expect(batchService.startBatchFlow()).resolves.toMatchObject({
+        skipped: 1,
+      });
+      expect(classify).toHaveBeenCalledWith({
+        accessToken: 'old-access-token',
+      });
+    } finally {
+      await batchService.onModuleDestroy();
+      vault.close();
+    }
+  });
+
+  it('rejects concurrent starts while the initial account list is loading', async () => {
+    const databasePath = `/tmp/codex-overlap-${randomUUID()}.sqlite`;
+    const vault = new AccountVault(databasePath, 'test-only-encryption-key');
+    await vault.upsert({
+      email: 'a@example.com',
+      password: 'a-password',
+      accessToken: 'a-token',
+    });
+    const batchService = new CodexService(
+      { ...config, databasePath, encryptionKey: 'test-only-encryption-key' },
+      { classify: async () => 'valid' },
+    );
+    try {
+      const first = batchService.startBatchFlow();
+      await expect(batchService.startBatchFlow()).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      await expect(first).resolves.toMatchObject({ total: 1, completed: 1 });
+    } finally {
+      await batchService.onModuleDestroy();
+      vault.close();
+    }
+  });
+  it('continues after a browser launch failure and closes the next account browser', async () => {
+    const databasePath = `/tmp/codex-browser-continuation-${randomUUID()}.sqlite`;
+    const vault = new AccountVault(databasePath, 'test-only-encryption-key');
+    for (const email of ['a@example.com', 'b@example.com']) {
+      await vault.upsert({
+        email,
+        password: 'password',
+        totpSecret: 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ',
+      });
+    }
+    let batchService: CodexService;
+    let launches = 0;
+    let browserClosed = false;
+    let state = '';
+    let callbackCompletion: Promise<unknown> | undefined;
+    mockCamoufox.mockImplementation(async () => {
+      launches += 1;
+      if (launches === 1) throw new Error('browser launch failed');
+      const stages = ['email'];
+      const locator = (kind: string) => ({
+        waitFor: () => Promise.resolve(),
+        fill: () => Promise.resolve(),
+        click: () => {
+          if (kind === 'continue' && stages[0] === 'email') stages[0] = 'password';
+          else if (kind === 'continue' && stages[0] === 'password') stages[0] = 'totp';
+          else if (kind === 'continue' && stages[0] === 'totp') stages[0] = 'consent';
+          else if (kind === 'continue' && stages[0] === 'consent') {
+            callbackCompletion = batchService.handleCallback('authorization-code', state);
+          }
+          return Promise.resolve();
+        },
+      });
+      const page = {
+        goto: (url: string) => {
+          state = new URL(url).searchParams.get('state') ?? '';
+          return Promise.resolve();
+        },
+        url: () => 'https://auth.openai.com/log-in',
+        getByLabel: (name: RegExp) =>
+          locator(name.test('email') ? 'email' : name.test('password') ? 'password' : 'totp'),
+        getByRole: (_role: string, options: { name: RegExp | string }) =>
+          locator(options.name === 'Continue' || options.name instanceof RegExp ? 'continue' : 'totp'),
+      };
+      return {
+        newContext: async () => ({ newPage: async () => page }),
+        close: async () => { browserClosed = true; },
+      };
+    });
+    batchService = new CodexService(
+      {
+        ...config,
+        databasePath,
+        encryptionKey: 'test-only-encryption-key',
+      },
+      undefined,
+      async () => (await mockCamoufox()) as Browser,
+    );
+    const originalFetch = global.fetch;
+    global.fetch = async () => new Response(JSON.stringify({
+      access_token: 'new-access-token',
+      refresh_token: 'new-refresh-token',
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+    try {
+      const result = await batchService.startBatchFlow();
+      await callbackCompletion;
+      expect(result.accounts).toEqual([
+        expect.objectContaining({ email: 'a@example.com', outcome: 'failed' }),
+        expect.objectContaining({ email: 'b@example.com', outcome: 'authenticated' }),
+      ]);
+      expect(launches).toBe(2);
+      expect(browserClosed).toBe(true);
+      expect(await vault.get((await vault.list())[1].connectionId)).toEqual(
+        expect.objectContaining({ email: 'b@example.com', accessToken: 'new-access-token' }),
+      );
+    } finally {
+      mockCamoufox.mockReset();
+      global.fetch = originalFetch;
+      await batchService.onModuleDestroy();
+      vault.close();
+    }
   });
 });

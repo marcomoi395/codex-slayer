@@ -3,9 +3,9 @@ WORKDIR /app
 
 COPY package*.json ./
 RUN npm ci
+RUN npm run camoufox:fetch
 COPY . .
 RUN npm run build
-RUN npm run camoufox:fetch
 
 FROM node:22-bookworm-slim
 WORKDIR /app

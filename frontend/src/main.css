@@ -126,6 +126,10 @@ p {
   background: var(--panel);
   box-shadow: 6px 6px 0 #080711;
 }
+.status-panel {
+  max-height: 620px;
+  overflow-y: auto;
+}
 .panel-heading {
   display: flex;
   align-items: center;
@@ -234,6 +238,54 @@ input:focus {
   color: var(--cyan);
   text-transform: uppercase;
 }
+.batch-counts {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: 18px 0 0;
+}
+.batch-counts div {
+  padding: 7px;
+  border: 1px solid #403a56;
+  text-align: center;
+}
+.batch-counts dt {
+  color: var(--muted);
+  font-size: 13px;
+}
+.batch-counts dd {
+  margin: 4px 0 0;
+  color: var(--green);
+  font-size: 24px;
+}
+.batch-report {
+  display: grid;
+  gap: 6px;
+  margin: 18px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 18px;
+}
+.batch-report li {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 8px;
+  border-top: 1px solid #403a56;
+  padding-top: 6px;
+}
+.batch-report strong {
+  color: var(--cyan);
+  text-transform: uppercase;
+}
+.batch-report small {
+  grid-column: 1 / -1;
+  color: #ffdce0;
+}
+.batch-button {
+  width: 100%;
+  margin: 0 0 14px;
+}
+
 .log-list {
   display: grid;
   gap: 7px;
@@ -284,6 +336,30 @@ input:focus {
 .accounts-panel .panel-heading {
   margin-bottom: 14px;
 }
+.vault-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.secondary-button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 7px 10px;
+  border: 2px solid var(--border);
+  background: transparent;
+  color: #eee9fa;
+  font: 9px 'Press Start 2P', monospace;
+  cursor: pointer;
+}
+.secondary-button:hover {
+  border-color: var(--cyan);
+  color: var(--cyan);
+}
+.file-button input {
+  display: none;
+}
 .count {
   display: inline-grid;
   place-items: center;
@@ -302,6 +378,13 @@ input:focus {
   margin: 0;
   padding: 0;
   list-style: none;
+}
+.account-checkbox {
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  margin: 0 2px 0 0;
+  accent-color: var(--cyan);
 }
 .account-list li {
   display: flex;

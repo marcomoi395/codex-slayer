@@ -42,6 +42,7 @@ Open `http://localhost:5000`.
 ## API
 
 - `POST /auth/codex/accounts`: start login with email, password and Base32 TOTP secret.
+- `POST /auth/codex/batch`: start a sequential run across all saved accounts; response includes a stable `runId`.
 - `GET /auth/codex/status`: read flow status.
 - `GET /auth/codex/accounts`: list safe account metadata.
 - `DELETE /auth/codex/accounts/:connectionId`: delete a stored account.
